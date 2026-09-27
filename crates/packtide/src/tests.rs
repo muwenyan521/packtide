@@ -128,7 +128,10 @@ fn renders_package_records_with_ui_owned_ansi_and_columns() {
 
     assert_eq!(
         rows,
-        "\x1b[34mcore            \x1b[0m\tbash                               \t5.3-1                \x1b[32m✔ [已安装]\x1b[0m"
+        format!(
+            "\x1b[34mcore            \x1b[0m\t\x1b[1mbash\x1b[0m                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m{}\x1b[0m",
+            crate::locale::text(crate::locale::current(), "package.installed", &[])
+        )
     );
     assert_eq!(strip_ansi(&rows).split('\t').count(), 3);
 }

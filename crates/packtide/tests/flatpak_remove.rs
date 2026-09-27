@@ -64,6 +64,7 @@ impl Drop for Fixture {
 fn flatpak_remove_passes_the_application_id_to_uninstall() {
     let fixture = Fixture::new();
     let fzf_input = fixture.path().join("fzf-input.tsv");
+    let fzf_args = fixture.path().join("fzf.args");
     let flatpak_argv = fixture.path().join("flatpak.argv");
     let paru_argv = fixture.path().join("paru.argv");
 
@@ -78,8 +79,9 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     fixture.write_executable(
         "fzf",
         &format!(
-            "#!/bin/sh\ncat > '{0}'\n/usr/bin/awk -F '\\t' '$0 ~ /org.example.App/ {{ print; found = 1; exit }} END {{ if (!found) exit 4 }}' '{0}'\n",
-            fzf_input.display()
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{1}'\ncat > '{0}'\n/usr/bin/awk -F '\\t' '$0 ~ /org.example.App/ {{ print; found = 1; exit }} END {{ if (!found) exit 4 }}' '{0}'\n",
+            fzf_input.display(),
+            fzf_args.display()
         ),
     );
     fixture.write_executable(
@@ -104,6 +106,9 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
         String::from_utf8_lossy(&output.stderr)
     );
     let rows = fs::read_to_string(fzf_input).expect("read rows sent to fake fzf");
+    let arguments = fs::read_to_string(fzf_args).expect("read remove picker arguments");
+    assert!(arguments.contains("PACKTIDE · 卸载软件包"));
+    assert!(!arguments.contains("PACKTIDE · 安装软件包"));
     assert!(rows.contains("\x1b[36mflatpak"));
     assert!(rows.contains("org.example.App"));
     assert!(rows.contains("Example App (flathub)"));
@@ -151,6 +156,7 @@ fn default_install_keeps_query_when_no_ai_flag_follows_it() {
         .args(["bash", "--no-ai"])
         .env("PATH", path)
         .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_UI_LANG", "en")
         .output()
         .expect("run default install entry with fake commands");
 
@@ -160,6 +166,8 @@ fn default_install_keeps_query_when_no_ai_flag_follows_it() {
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = fs::read_to_string(fzf_args).expect("read fake fzf argv");
+    assert!(arguments.contains("PACKTIDE · Install Packages"));
+    assert!(arguments.contains("Packages to install >"));
     let arguments = arguments.lines().collect::<Vec<_>>();
     let query_index = arguments
         .iter()

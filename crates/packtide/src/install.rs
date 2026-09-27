@@ -37,7 +37,7 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
     else {
         println!(
             "{}",
-            crate::locale::text(crate::locale::current(), "selection.none", &[])
+            crate::locale::text(crate::locale::current(), "selection.install.none", &[])
         );
         return Ok(());
     };

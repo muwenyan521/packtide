@@ -81,13 +81,13 @@ pub(crate) fn collect_update_rows() -> Result<String> {
         ))
     })?;
     if let Some(output) = repo {
-        append_source_rows(&mut rows, &mut seen, "pacman", "36", &output);
+        append_source_rows(&mut rows, &mut seen, "pacman", "34", &output);
     }
     if let Some(output) = aur {
-        append_source_rows(&mut rows, &mut seen, "aur", "34", &output);
+        append_source_rows(&mut rows, &mut seen, "aur", "35", &output);
     }
     if let Some(output) = flatpak {
-        append_source_rows(&mut rows, &mut seen, "flatpak", "35", &output);
+        append_source_rows(&mut rows, &mut seen, "flatpak", "36", &output);
     }
     Ok(rows)
 }

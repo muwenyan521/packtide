@@ -88,11 +88,14 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
         }
         let padding = 35usize.saturating_sub(UnicodeWidthStr::width(name));
         let installed = if catalog.installed.contains(name) {
-            " \x1b[32m✔ [已安装]\x1b[0m"
+            format!(
+                " \x1b[32m{}\x1b[0m",
+                crate::locale::text(crate::locale::current(), "package.installed", &[])
+            )
         } else {
-            ""
+            String::new()
         };
-        write!(output, "\x1b[35m{:<16}\x1b[0m\t{name}", "aur")?;
+        write!(output, "\x1b[35m{:<16}\x1b[0m\t\x1b[1m{name}\x1b[0m", "aur")?;
         output.write_all(&SPACES[..padding.min(SPACES.len())])?;
         output.write_all(b"\t-                   ")?;
         output.write_all(installed.as_bytes())?;
@@ -117,21 +120,38 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
 ) -> io::Result<()> {
     let color = super::source_color(record.source);
     let installed = if mode == PackageListMode::Install && record.installed {
-        " \x1b[32m✔ [已安装]\x1b[0m"
+        format!(
+            " \x1b[32m{}\x1b[0m",
+            crate::locale::text(crate::locale::current(), "package.installed", &[])
+        )
     } else {
-        ""
+        String::new()
     };
     let source = record
         .repository
         .as_deref()
         .unwrap_or(record.source.as_str());
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
-    write!(output, "\x1b[{color}m{source:<16}\x1b[0m\t{}", record.name)?;
+    if mode == PackageListMode::Install {
+        write!(
+            output,
+            "\x1b[{color}m{source:<16}\x1b[0m\t\x1b[1m{}\x1b[0m",
+            record.name
+        )?;
+    } else {
+        write!(output, "\x1b[{color}m{source:<16}\x1b[0m\t{}", record.name)?;
+    }
     output.write_all(&SPACES[..name_padding.min(SPACES.len())])?;
     output.write_all(b"\t")?;
     match &record.listing {
         PackageListing::Version(version) => {
+            if mode == PackageListMode::Install {
+                output.write_all(b"\x1b[2m")?;
+            }
             output.write_all(version.as_bytes())?;
+            if mode == PackageListMode::Install {
+                output.write_all(b"\x1b[0m")?;
+            }
             let padding = 20usize.saturating_sub(UnicodeWidthStr::width(version.as_str()));
             output.write_all(&SPACES[..padding.min(SPACES.len())])?;
         }
@@ -247,6 +267,35 @@ mod tests {
     }
 
     #[test]
+    fn install_emphasis_does_not_leak_into_remove_rows() {
+        let record = PackageRecord {
+            source: PackageSource::Pacman,
+            repository: Some("core".to_owned()),
+            name: "bash".to_owned(),
+            listing: PackageListing::Version("5.3-1".to_owned()),
+            installed: true,
+        };
+        let install = super::render_package_rows(&[record], super::PackageListMode::Install);
+        let remove = super::render_package_rows(
+            &[PackageRecord {
+                source: PackageSource::Pacman,
+                repository: Some("core".to_owned()),
+                name: "bash".to_owned(),
+                listing: PackageListing::Version("5.3-1".to_owned()),
+                installed: true,
+            }],
+            super::PackageListMode::Remove,
+        );
+
+        assert!(install.contains("\t\x1b[1mbash\x1b[0m"));
+        assert!(install.contains("\x1b[2m5.3-1\x1b[0m"));
+        assert!(!remove.contains("\x1b[1mbash\x1b[0m"));
+        assert!(!remove.contains("\x1b[2m5.3-1\x1b[0m"));
+        assert!(remove.contains("\tbash"));
+        assert!(!remove.contains("[已安装]") && !remove.contains("[Installed]"));
+    }
+
+    #[test]
     fn install_catalog_skips_official_and_duplicate_aur_names() {
         let catalog = crate::sources::InstallCatalog {
             official: vec![PackageRecord {
@@ -263,8 +312,9 @@ mod tests {
         let mut bytes = Vec::new();
         super::write_install_catalog(&catalog, &mut bytes).expect("render catalog");
         let rows = String::from_utf8(bytes).expect("UTF-8 catalog");
-        assert_eq!(rows.matches("\ttool").count(), 1);
-        assert_eq!(rows.matches("\tbash").count(), 1);
+        let plain = super::super::strip_ansi(&rows);
+        assert_eq!(plain.matches("\ttool").count(), 1);
+        assert_eq!(plain.matches("\tbash").count(), 1);
         assert!(!rows.contains("invalid"));
     }
 }

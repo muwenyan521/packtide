@@ -5,6 +5,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::current_executable;
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::COMMON_FZF_LAYOUT_ARGS;
 
@@ -114,7 +115,15 @@ fn select_rows_with_input(
     } else {
         crate::locale::text(lang, "install.actions", &[])
     };
-    let title = crate::locale::text(lang, "install.title", &[]);
+    let title = crate::locale::text(
+        lang,
+        if removing {
+            "remove.title"
+        } else {
+            "install.title"
+        },
+        &[],
+    );
     let prompt = crate::locale::text(
         lang,
         if removing {
@@ -127,8 +136,26 @@ fn select_rows_with_input(
     let refresh = crate::locale::text(lang, "picker.refresh", &[]);
     let exit = crate::locale::text(lang, "picker.exit", &[]);
     let using = crate::locale::text(lang, "picker.using", &[("helper", helper)]);
-    let header =
-        format!("\x1b[1;36m{title}\x1b[0m  {action} | {refresh} | {exit} | \x1b[33m{using}\x1b[0m");
+    let columns = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(80);
+    let title_width = UnicodeWidthStr::width(title.as_str());
+    let using_width = UnicodeWidthStr::width(using.as_str());
+    let gap = columns.saturating_sub(title_width + using_width).max(2);
+    let action_line = format!("{action} | {refresh} | {exit}");
+    let action_line =
+        if UnicodeWidthStr::width(action_line.as_str()) + title_width + using_width + 2 > columns {
+            action.to_owned()
+        } else {
+            action_line
+        };
+    let yellow_using = format!("\x1b[33m{using}\x1b[0m");
+    let header = format!(
+        "\x1b[1;36m{title}\x1b[0m{}{yellow_using}\n\x1b[2m{action_line}\x1b[0m",
+        " ".repeat(gap)
+    );
     let marker = if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         Some(std::env::temp_dir().join(format!("packtide-ready-{}-{nonce}", std::process::id())))

@@ -80,11 +80,7 @@ pub(crate) fn render_update_rows(updates: &[PackageUpdate]) -> String {
         if index > 0 {
             rows.push('\n');
         }
-        let color = match item.source {
-            PackageSource::Pacman => "1;36",
-            PackageSource::Aur => "1;34",
-            PackageSource::Flatpak => "1;35",
-        };
+        let color = crate::ui::source_color(item.source);
         write!(
             rows,
             "\x1b[{color}m[{:<7}]\x1b[0m\t{}\t{}",

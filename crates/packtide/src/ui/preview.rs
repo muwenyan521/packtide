@@ -37,14 +37,39 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         _ => bail!("unknown preview kind: {kind}"),
     };
     let output = run_capture(program, &operation, true)?;
-    print!("{}", colorize_metadata(&output.stdout));
+    let lang = crate::locale::current();
+    let source_key = match source {
+        Some(PackageSource::Pacman) => "source.pacman",
+        Some(PackageSource::Aur) => "source.aur",
+        Some(PackageSource::Flatpak) => "source.flatpak",
+        None => "source.pacman",
+    };
+    let source_label = crate::locale::text(lang, source_key, &[]);
+    let version = parsed
+        .as_ref()
+        .and_then(|_| raw_row.split('\t').nth(2))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "-")
+        .unwrap_or("unknown");
+    println!(
+        "\x1b[1;36m{package}\x1b[0m  \x1b[2m{source_label} · {version}\x1b[0m\n\x1b[2m────────────────────────────────────────\x1b[0m"
+    );
+    if output.stdout.trim().is_empty() {
+        println!("{}", crate::locale::text(lang, "preview.empty", &[]));
+    } else {
+        print!("{}", colorize_metadata(&output.stdout));
+    }
     if !output.status.success() {
         let message = output.stderr.trim();
-        if !message.is_empty() {
-            eprintln!("preview failed: {message}");
+        let error = if message.is_empty() {
+            format!("{program} exited with {}", output.status)
         } else {
-            eprintln!("preview failed: {program} exited with {}", output.status);
-        }
+            message.to_owned()
+        };
+        println!(
+            "\x1b[1;31m!\x1b[0m {}",
+            crate::locale::text(lang, "preview.failed", &[("error", &error)])
+        );
     }
     Ok(())
 }

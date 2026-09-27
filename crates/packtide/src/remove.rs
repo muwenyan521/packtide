@@ -31,7 +31,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     let Some(selected) = select_rows(helper, true, rows, query, Some(started_at))? else {
         println!(
             "{}",
-            crate::locale::text(crate::locale::current(), "selection.none", &[])
+            crate::locale::text(crate::locale::current(), "selection.remove.none", &[])
         );
         return Ok(());
     };
