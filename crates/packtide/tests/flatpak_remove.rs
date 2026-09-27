@@ -129,6 +129,51 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
 }
 
 #[test]
+fn remove_cancel_keeps_all_transactions_unstarted() {
+    let fixture = Fixture::new();
+    let paru_argv = fixture.path().join("paru.argv");
+    let flatpak_argv = fixture.path().join("flatpak.argv");
+
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$2\" in\n  -Q) printf 'bash 5.3-1\\n' ;;\n  -Sl) printf 'core bash 5.3-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable(
+        "paru",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 0\n",
+            paru_argv.display()
+        ),
+    );
+    fixture.write_executable(
+        "flatpak",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in list) exit 0 ;; uninstall) printf '%s\\n' \"$@\" > '{}' ;; *) exit 64 ;; esac\n",
+            flatpak_argv.display()
+        ),
+    );
+    fixture.write_executable("fzf", "#!/bin/sh\ncat > /dev/null\nexit 1\n");
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["remove"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run packtide remove with fake fzf cancellation");
+
+    assert!(
+        output.status.success(),
+        "remove cancellation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No packages selected"));
+    assert!(!paru_argv.exists());
+    assert!(!flatpak_argv.exists());
+}
+
+#[test]
 fn default_install_keeps_query_when_no_ai_flag_follows_it() {
     let fixture = Fixture::new();
     let fzf_args = fixture.path().join("fzf.argv");
