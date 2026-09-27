@@ -1,0 +1,29 @@
+pkgname=packtide
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Package and system maintenance tools'
+arch=('x86_64')
+url='https://example.invalid/packtide'
+license=('MIT')
+depends=('fzf' 'pacman' 'sudo')
+optdepends=(
+  'paru: AUR package helper'
+  'yay: alternative AUR package helper'
+  'flatpak: Flatpak package operations'
+  'reflector: mirror-update command'
+  'quicksave: Btrfs snapshot support'
+  'grub: GRUB configuration refresh'
+  'pacman-contrib: checkupdates command'
+  'waybar: update signal refresh'
+)
+source=()
+sha256sums=()
+
+build() {
+  cargo build --release --locked --workspace
+}
+
+package() {
+  install -Dm755 target/release/packtide "$pkgdir/usr/bin/packtide"
+  install -Dm755 target/release/systide "$pkgdir/usr/bin/systide"
+}

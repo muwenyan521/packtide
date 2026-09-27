@@ -1,0 +1,270 @@
+use super::strip_ansi;
+use crate::model::{PackageListing, PackageRecord};
+use std::collections::HashSet;
+use std::io::{self, Write};
+use system_tools_core::PackageSource;
+use unicode_width::UnicodeWidthStr;
+
+const SPACES: &[u8] = b"                                                                ";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackageListMode {
+    Install,
+    Remove,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PackageRow {
+    pub(crate) source: PackageSource,
+    pub(crate) repository: Option<String>,
+    pub(crate) name: String,
+}
+
+pub(crate) fn render_package_rows(records: &[PackageRecord], mode: PackageListMode) -> String {
+    let mut rows = Vec::with_capacity(records.len().saturating_mul(96));
+    for (index, record) in records.iter().enumerate() {
+        if index > 0 {
+            rows.push(b'\n');
+        }
+        write_package_row(&mut rows, record, mode).expect("writing to a vector cannot fail");
+    }
+    String::from_utf8(rows).expect("rendered package rows are valid UTF-8")
+}
+
+pub(crate) fn write_install_catalog<W: Write>(
+    catalog: &crate::sources::InstallCatalog,
+    mut output: W,
+) -> io::Result<()> {
+    let rows_started = write_official_install_rows(catalog, &mut output)?;
+    write_aur_install_rows(catalog, &mut output, rows_started)
+}
+
+pub(crate) fn write_official_install_rows<W: Write>(
+    catalog: &crate::sources::InstallCatalog,
+    output: &mut W,
+) -> io::Result<bool> {
+    let mut rows_started = false;
+    for record in &catalog.official {
+        if rows_started {
+            output.write_all(b"\n")?;
+        }
+        write_package_row(output, record, PackageListMode::Install)?;
+        rows_started = true;
+    }
+    Ok(rows_started)
+}
+
+pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
+    catalog: &crate::sources::InstallCatalog,
+    output: &mut W,
+    mut rows_started: bool,
+) -> io::Result<()> {
+    let official = if catalog.official_names.is_empty() {
+        catalog
+            .official
+            .iter()
+            .map(|record| record.name.as_str())
+            .collect::<HashSet<_>>()
+    } else {
+        catalog
+            .official_names
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>()
+    };
+    let mut seen = HashSet::new();
+    let mut aur_raw = 0usize;
+    let mut aur_rendered = 0usize;
+    for name in catalog.aur_names.lines() {
+        aur_raw += name.len();
+        if !crate::sources::valid_package_name(name)
+            || official.contains(name)
+            || !seen.insert(name)
+        {
+            continue;
+        }
+        if rows_started {
+            output.write_all(b"\n")?;
+        }
+        let padding = 35usize.saturating_sub(UnicodeWidthStr::width(name));
+        let installed = if catalog.installed.contains(name) {
+            " \x1b[32m✔ [已安装]\x1b[0m"
+        } else {
+            ""
+        };
+        write!(output, "\x1b[35m{:<16}\x1b[0m\t{name}", "aur")?;
+        output.write_all(&SPACES[..padding.min(SPACES.len())])?;
+        output.write_all(b"\t-                   ")?;
+        output.write_all(installed.as_bytes())?;
+        aur_rendered += name.len() + padding + installed.len() + 24;
+        rows_started = true;
+    }
+    if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
+        eprintln!(
+            "render_timing source=aur_install_rows raw_bytes={} filtered_names={} rendered_bytes={}",
+            aur_raw,
+            seen.len(),
+            aur_rendered
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn write_package_row<W: Write + ?Sized>(
+    output: &mut W,
+    record: &PackageRecord,
+    mode: PackageListMode,
+) -> io::Result<()> {
+    let color = super::source_color(record.source);
+    let installed = if mode == PackageListMode::Install && record.installed {
+        " \x1b[32m✔ [已安装]\x1b[0m"
+    } else {
+        ""
+    };
+    let source = record
+        .repository
+        .as_deref()
+        .unwrap_or(record.source.as_str());
+    let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
+    write!(output, "\x1b[{color}m{source:<16}\x1b[0m\t{}", record.name)?;
+    output.write_all(&SPACES[..name_padding.min(SPACES.len())])?;
+    output.write_all(b"\t")?;
+    match &record.listing {
+        PackageListing::Version(version) => {
+            output.write_all(version.as_bytes())?;
+            let padding = 20usize.saturating_sub(UnicodeWidthStr::width(version.as_str()));
+            output.write_all(&SPACES[..padding.min(SPACES.len())])?;
+        }
+        PackageListing::Flatpak { app_name, origin } => {
+            write!(output, "{app_name} ({origin})")?;
+        }
+    }
+    output.write_all(installed.as_bytes())
+}
+
+pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
+    let stripped = strip_ansi(row);
+    let clean = strip_outer_quotes(&stripped);
+    let (source_label, name) = if let Some((source, rest)) = clean.split_once('\t') {
+        (source.trim(), rest.split_whitespace().next()?)
+    } else {
+        let mut fields = clean.split_whitespace();
+        (fields.next()?, fields.next()?)
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let (source, repository) = match PackageSource::parse(source_label) {
+        Some(source) => (source, None),
+        None if crate::sources::valid_package_name(source_label) => {
+            (PackageSource::Pacman, Some(source_label.to_owned()))
+        }
+        None => return None,
+    };
+    Some(PackageRow {
+        source,
+        repository,
+        name: name.to_owned(),
+    })
+}
+
+fn strip_outer_quotes(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+    {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PackageRow, parse_package_row};
+    use crate::model::{PackageListing, PackageRecord};
+    use std::collections::HashSet;
+    use system_tools_core::PackageSource;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn parses_ansi_padded_tab_row() {
+        let row = "\x1b[34mcore            \x1b[0m\tbash                               \t5.2-1";
+        assert_eq!(
+            parse_package_row(row),
+            Some(PackageRow {
+                source: PackageSource::Pacman,
+                repository: Some("core".to_owned()),
+                name: "bash".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_space_aligned_downgrade_row() {
+        assert_eq!(
+            parse_package_row("extra            bash                           5.2-1"),
+            Some(PackageRow {
+                source: PackageSource::Pacman,
+                repository: Some("extra".to_owned()),
+                name: "bash".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_source_labels() {
+        assert_eq!(parse_package_row("../escape bash 5.2-1"), None);
+    }
+
+    #[test]
+    fn parses_fzf_shell_quoted_row() {
+        let row = "'core            \tbash                               \t5.3-1                [已安装]'";
+        assert_eq!(
+            parse_package_row(row),
+            Some(PackageRow {
+                source: PackageSource::Pacman,
+                repository: Some("core".to_owned()),
+                name: "bash".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn pads_cjk_names_by_terminal_columns() {
+        let record = PackageRecord {
+            source: PackageSource::Flatpak,
+            repository: None,
+            name: "示例应用".to_owned(),
+            listing: PackageListing::Version("1.0".to_owned()),
+            installed: true,
+        };
+        let row = super::render_package_rows(&[record], super::PackageListMode::Remove);
+        let clean = super::super::strip_ansi(&row);
+        let name_column = clean.split('\t').nth(1).expect("name column");
+        assert_eq!(UnicodeWidthStr::width(name_column), 35);
+    }
+
+    #[test]
+    fn install_catalog_skips_official_and_duplicate_aur_names() {
+        let catalog = crate::sources::InstallCatalog {
+            official: vec![PackageRecord {
+                source: PackageSource::Pacman,
+                repository: Some("core".to_owned()),
+                name: "bash".to_owned(),
+                listing: PackageListing::Version("5.3".to_owned()),
+                installed: false,
+            }],
+            official_names: HashSet::new(),
+            aur_names: "bash\ntool\ntool\n../invalid\n".to_owned(),
+            installed: HashSet::new(),
+        };
+        let mut bytes = Vec::new();
+        super::write_install_catalog(&catalog, &mut bytes).expect("render catalog");
+        let rows = String::from_utf8(bytes).expect("UTF-8 catalog");
+        assert_eq!(rows.matches("\ttool").count(), 1);
+        assert_eq!(rows.matches("\tbash").count(), 1);
+        assert!(!rows.contains("invalid"));
+    }
+}

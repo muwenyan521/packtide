@@ -1,0 +1,13 @@
+[package]
+name = "systide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-distribution system update orchestrator"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+quick-xml = "0.41.0"
+system-tools-core = { path = "../system-tools-core", version = "0.1.0" }
+ureq = { version = "3", default-features = false, features = ["rustls"] }

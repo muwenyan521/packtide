@@ -1,0 +1,8 @@
+[package]
+name = "system-tools-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
