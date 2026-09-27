@@ -97,6 +97,7 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
         .args(["remove"])
         .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "zh")
         .output()
         .expect("run packtide remove with fake commands");
 
@@ -109,6 +110,11 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     let arguments = fs::read_to_string(fzf_args).expect("read remove picker arguments");
     assert!(arguments.contains("PACKTIDE · 卸载软件包"));
     assert!(!arguments.contains("PACKTIDE · 安装软件包"));
+    assert!(arguments.contains("\x1b[1;33mPACKTIDE · 卸载软件包\x1b[0m"));
+    assert!(arguments.contains("! 卸载不可逆"));
+    assert!(arguments.contains("alt-c:accept"));
+    assert!(arguments.contains("正在刷新卸载列表"));
+    assert!(arguments.contains("__preview remove"));
     assert!(rows.contains("\x1b[36mflatpak"));
     assert!(rows.contains("org.example.App"));
     assert!(rows.contains("Example App (flathub)"));

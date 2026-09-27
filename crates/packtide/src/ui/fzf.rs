@@ -99,7 +99,15 @@ fn select_rows_with_input(
     );
     let reload = format!(
         "ctrl-r:change-prompt({})+reload-sync({reload_command})+change-prompt({})",
-        crate::locale::text(lang, "install.refresh", &[]),
+        crate::locale::text(
+            lang,
+            if removing {
+                "remove.refresh"
+            } else {
+                "install.refresh"
+            },
+            &[],
+        ),
         crate::locale::text(
             lang,
             if removing {
@@ -151,9 +159,10 @@ fn select_rows_with_input(
         } else {
             action_line
         };
+    let title_color = if removing { "1;33" } else { "1;36" };
     let yellow_using = format!("\x1b[33m{using}\x1b[0m");
     let header = format!(
-        "\x1b[1;36m{title}\x1b[0m{}{yellow_using}\n\x1b[2m{action_line}\x1b[0m",
+        "\x1b[{title_color}m{title}\x1b[0m{}{yellow_using}\n\x1b[2m{action_line}\x1b[0m",
         " ".repeat(gap)
     );
     let marker = if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
