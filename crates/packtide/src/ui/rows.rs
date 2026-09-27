@@ -131,15 +131,18 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
         .repository
         .as_deref()
         .unwrap_or(record.source.as_str());
+    let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source));
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
     if mode == PackageListMode::Install {
-        write!(
-            output,
-            "\x1b[{color}m{source:<16}\x1b[0m\t\x1b[1m{}\x1b[0m",
-            record.name
-        )?;
+        write!(output, "\x1b[{color}m{source}")?;
+        output.write_all(&SPACES[..source_padding.min(SPACES.len())])?;
+        output.write_all(b"\x1b[0m")?;
+        write!(output, "\t\x1b[1m{}\x1b[0m", record.name)?;
     } else {
-        write!(output, "\x1b[{color}m{source:<16}\x1b[0m\t{}", record.name)?;
+        write!(output, "\x1b[{color}m{source}")?;
+        output.write_all(&SPACES[..source_padding.min(SPACES.len())])?;
+        output.write_all(b"\x1b[0m")?;
+        write!(output, "\t{}", record.name)?;
     }
     output.write_all(&SPACES[..name_padding.min(SPACES.len())])?;
     output.write_all(b"\t")?;
@@ -293,6 +296,21 @@ mod tests {
         assert!(!remove.contains("\x1b[2m5.3-1\x1b[0m"));
         assert!(remove.contains("\tbash"));
         assert!(!remove.contains("[已安装]") && !remove.contains("[Installed]"));
+    }
+
+    #[test]
+    fn preserves_long_package_values_for_fzf_accept() {
+        let record = PackageRecord {
+            source: PackageSource::Pacman,
+            repository: Some("community-long-name".to_owned()),
+            name: "package-name-that-is-longer-than-the-display-column".to_owned(),
+            listing: PackageListing::Version("version-with-a-long-suffix-2026.09.27-1".to_owned()),
+            installed: false,
+        };
+        let row = super::render_package_rows(&[record], super::PackageListMode::Install);
+        let plain = super::super::strip_ansi(&row);
+        assert!(plain.contains("package-name-that-is-longer-than-the-display-column"));
+        assert!(plain.contains("version-with-a-long-suffix-2026.09.27-1"));
     }
 
     #[test]
