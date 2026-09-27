@@ -28,7 +28,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         | ("install", Some(_)) => helper,
         _ => bail!("unknown preview kind: {kind}"),
     };
-    let operation = match (kind, source) {
+    let mut operation = match (kind, source) {
         ("remove", Some(PackageSource::Flatpak)) => vec!["info", package],
         ("remove", Some(PackageSource::Pacman | PackageSource::Aur)) | ("downgrade", Some(_)) => {
             vec!["-Qi", package]
@@ -36,6 +36,9 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         ("install", Some(_)) => vec!["-Si", package],
         _ => bail!("unknown preview kind: {kind}"),
     };
+    if source != Some(PackageSource::Flatpak) {
+        operation.insert(0, "--color=always");
+    }
     let output = run_capture(program, &operation, true)?;
     let lang = crate::locale::current();
     let source_key = match source {

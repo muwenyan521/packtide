@@ -168,6 +168,10 @@ fn default_install_keeps_query_when_no_ai_flag_follows_it() {
     let arguments = fs::read_to_string(fzf_args).expect("read fake fzf argv");
     assert!(arguments.contains("PACKTIDE · Install Packages"));
     assert!(arguments.contains("Packages to install >"));
+    assert!(arguments.contains("--pointer"));
+    assert!(arguments.contains("▌"));
+    assert!(arguments.contains("--marker"));
+    assert!(arguments.contains("✔"));
     let arguments = arguments.lines().collect::<Vec<_>>();
     let query_index = arguments
         .iter()
