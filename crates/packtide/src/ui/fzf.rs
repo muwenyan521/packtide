@@ -88,6 +88,7 @@ fn select_rows_with_input(
 ) -> Result<Option<String>> {
     let executable = current_executable()?;
     let mode = if removing { "remove" } else { "install" };
+    let lang = crate::locale::current();
     let reload_command = format!(
         "PACKTIDE_{}_LIST_ONLY=1 {} {}{}",
         if removing { "REMOVE" } else { "INSTALL" },
@@ -96,14 +97,38 @@ fn select_rows_with_input(
         if removing { "" } else { " --refresh" }
     );
     let reload = format!(
-        "ctrl-r:change-prompt(正在刷新列表... > )+reload-sync({reload_command})+change-prompt(待安装项目 > )"
+        "ctrl-r:change-prompt({})+reload-sync({reload_command})+change-prompt({})",
+        crate::locale::text(lang, "install.refresh", &[]),
+        crate::locale::text(
+            lang,
+            if removing {
+                "remove.prompt"
+            } else {
+                "install.prompt"
+            },
+            &[]
+        )
     );
     let action = if removing {
-        "Tab:多选 | Enter:卸载 | Alt+C:卸载"
+        crate::locale::text(lang, "remove.actions", &[])
     } else {
-        "Tab:多选 | Enter:安装"
+        crate::locale::text(lang, "install.actions", &[])
     };
-    let header = format!("{action} | Ctrl+R:强制刷新 | Esc:退出 | \x1b[33mUsing {helper}\x1b[0m");
+    let title = crate::locale::text(lang, "install.title", &[]);
+    let prompt = crate::locale::text(
+        lang,
+        if removing {
+            "remove.prompt"
+        } else {
+            "install.prompt"
+        },
+        &[],
+    );
+    let refresh = crate::locale::text(lang, "picker.refresh", &[]);
+    let exit = crate::locale::text(lang, "picker.exit", &[]);
+    let using = crate::locale::text(lang, "picker.using", &[("helper", helper)]);
+    let header =
+        format!("\x1b[1;36m{title}\x1b[0m  {action} | {refresh} | {exit} | \x1b[33m{using}\x1b[0m");
     let marker = if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         Some(std::env::temp_dir().join(format!("packtide-ready-{}-{nonce}", std::process::id())))
@@ -130,6 +155,8 @@ fn select_rows_with_input(
         "--track",
         "--header",
         header.as_str(),
+        "--prompt",
+        prompt.as_str(),
         "--preview-window",
         "down:55%:wrap",
         "--bind",

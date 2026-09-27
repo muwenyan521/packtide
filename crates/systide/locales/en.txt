@@ -1,0 +1,20 @@
+intro=== Arch Linux System Update Assistant ===
+desc=Actions to perform:
+cancel=Update cancelled.
+confirm=Proceed with %s? [Y/n]
+partial=Databases were synchronized but the upgrade failed; do not perform a partial upgrade. Resolve the conflict and retry.
+mirror_old=The mirror list is older than 30 days.
+mirror_fresh=The mirror list is fresh.
+news_fail=Failed to fetch news
+force_confirm=News fetch failed. Force update? [y/N]
+mirror_skip=Mirror updater not found; skipping.
+snap=[0/6] Creating Btrfs Snapshot...
+mirror_step=[1/6] Checking mirrorlist age...
+db_step=[2/6] Sync DB & Keyrings
+update_step=[3/6] Upgrading system...
+flatpak_step=[4/6] Checking Flatpak updates
+grub_step=[5/6] Updating GRUB
+keyring_ok=DB & Keyrings synced.
+keyring_warn=Keyring issues detected...
+grub_ok=GRUB updated.
+grub_fail=GRUB update failed.

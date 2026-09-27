@@ -1,0 +1,10 @@
+install.title=PACKTIDE · 安装软件包
+install.prompt=待安装项目 >
+remove.prompt=待卸载项目 >
+install.refresh=正在刷新列表... >
+install.actions=Tab:多选 | Enter:安装
+remove.actions=Tab:多选 | Enter:卸载 | Alt+C:卸载
+picker.refresh=Ctrl+R:强制刷新
+picker.exit=Esc:退出
+picker.using=Using {helper}
+selection.none=未选择软件包。

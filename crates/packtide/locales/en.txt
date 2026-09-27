@@ -1,0 +1,10 @@
+install.title=PACKTIDE · Install Packages
+install.prompt=Packages to install >
+remove.prompt=Packages to remove >
+install.refresh=Refreshing package list... >
+install.actions=Tab:select | Enter:install
+remove.actions=Tab:select | Enter:remove | Alt+C:remove
+picker.refresh=Ctrl+R:refresh
+picker.exit=Esc:exit
+picker.using=Using {helper}
+selection.none=No packages selected.

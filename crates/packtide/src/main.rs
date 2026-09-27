@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod downgrade;
 mod install;
+mod locale;
 mod mirror_update;
 mod model;
 mod remove;

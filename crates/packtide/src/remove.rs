@@ -8,9 +8,7 @@ use system_tools_core::{
 
 use crate::sources::{flatpak_rows, parse_remove_rows};
 use crate::transaction::{execute_flatpak, execute_package};
-use crate::ui::{
-    NO_SELECTION, PackageListMode, parse_package_row, render_package_rows, select_rows,
-};
+use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_rows};
 
 pub(crate) fn run(query: &[String]) -> Result<()> {
     let started = Instant::now();
@@ -31,7 +29,10 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         return Ok(());
     }
     let Some(selected) = select_rows(helper, true, rows, query, Some(started_at))? else {
-        println!("{NO_SELECTION}");
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "selection.none", &[])
+        );
         return Ok(());
     };
     let mut pacman = Vec::new();

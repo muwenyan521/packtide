@@ -7,7 +7,7 @@ use system_tools_core::{
 
 use crate::sources::install_rows;
 use crate::transaction::execute_package;
-use crate::ui::{NO_SELECTION, parse_package_row, write_install_catalog};
+use crate::ui::{parse_package_row, write_install_catalog};
 
 pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
     let started = Instant::now();
@@ -35,7 +35,10 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         Some(started_at),
     )?
     else {
-        println!("{NO_SELECTION}");
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "selection.none", &[])
+        );
         return Ok(());
     };
     let mut repo = Vec::new();
