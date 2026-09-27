@@ -2,5 +2,5 @@ version=0.1.0
 architecture=x86_64
 target=x86_64-unknown-linux-gnu
 rustc=rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)
-2e5a39d70592ad166e5c4dd7bd4be40548889578f3e1fe82990b1d4d4d06e1c7  target/release/packtide
+37a2d134befb76cbbba09b166f3d937e4e12189c2ae5904eeb75c0f31b030f54  target/release/packtide
 bd85fbb11fd942b6b17ce32c35e83fa1a2856334161304a14adfb949fee38bce  target/release/systide
