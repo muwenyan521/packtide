@@ -178,6 +178,13 @@ mod tests {
     }
 
     #[test]
+    fn preserves_unstructured_colored_section_headers() {
+        let rendered = colorize_metadata("\x1b[1;35mOptional Dependencies\x1b[0m\n");
+        assert!(rendered.contains("\x1b[1;35mOptional Dependencies\x1b[0m"));
+        assert!(!rendered.contains("\x1b[1;36mOptional Dependencies"));
+    }
+
+    #[test]
     fn preview_header_fits_narrow_windows_without_changing_package_identity() {
         let header = preview_header("示例软件包-very-long-name", "官方源", "2026.09.30-long", 24);
         let lines = header

@@ -50,4 +50,10 @@ mod tests {
         let value = "\x1b[1;38;5;45mName\x1b[0m : \x1b]8;;https://example.test\x07bash\x1b]8;;\x07";
         assert_eq!(strip_ansi(value), "Name : bash");
     }
+
+    #[test]
+    fn drops_incomplete_escape_sequences_without_leaking_control_text() {
+        assert_eq!(strip_ansi("Name\x1b[31"), "Name");
+        assert_eq!(strip_ansi("Section\x1b]8;;https://example.test"), "Section");
+    }
 }
