@@ -491,6 +491,7 @@ fn downgrade_cancel_does_not_start_the_transaction() {
     let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
         .args(["downgrade"])
         .env("PATH", fixture.path())
+        .env("PACKTIDE_UI_LANG", "en")
         .output()
         .expect("run packtide downgrade with a fake fzf cancel");
 
@@ -500,12 +501,45 @@ fn downgrade_cancel_does_not_start_the_transaction() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("No packages selected."));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("No packages selected for downgrade.")
+    );
     let rows = fs::read_to_string(fzf_input).expect("read rows sent to fake fzf");
     assert!(rows.contains("core"));
     assert!(rows.contains("bash"));
     assert!(!downgrade_argv.exists());
     assert!(!paru_argv.exists());
+}
+
+#[test]
+fn downgrade_picker_uses_localized_header_and_source_colors() {
+    let fixture = Fixture::new();
+    let fzf_args = fixture.path().join("fzf.args");
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$2\" in\n  -Sl) printf 'core bash 5.3-1\\n' ;;\n  -Q) printf 'bash 5.3-1\\naur-tool 1.0\\n' ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable("paru", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable("downgrade", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat > /dev/null\nexit 1\n",
+            fzf_args.display()
+        ),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["downgrade"])
+        .env("PATH", fixture.path())
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run localized downgrade picker");
+
+    assert!(output.status.success());
+    let args = fs::read_to_string(fzf_args).expect("read fzf arguments");
+    assert!(args.contains("PACKTIDE · Downgrade Packages"));
+    assert!(args.contains("Packages to downgrade >"));
+    assert!(args.contains("__preview downgrade"));
 }
 
 #[test]

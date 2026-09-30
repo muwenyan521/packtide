@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use system_tools_core::PackageSource;
 use system_tools_core::{current_executable, require_command_for, run_capture, run_privileged};
 use unicode_width::UnicodeWidthStr;
 
 use crate::transaction::print_summary;
-use crate::ui::{COMMON_FZF_LAYOUT_ARGS, NO_SELECTION, classify_picker_status};
+use crate::ui::{COMMON_FZF_LAYOUT_ARGS, classify_picker_status};
 
 pub fn run(query: &[String]) -> Result<()> {
     for (command, capability) in [
@@ -29,15 +30,20 @@ pub fn run(query: &[String]) -> Result<()> {
     } else {
         "yay"
     };
+    let lang = crate::locale::current();
+    let title = crate::locale::text(lang, "downgrade.title", &[]);
+    let actions = crate::locale::text(lang, "downgrade.actions", &[]);
+    let prompt = crate::locale::text(lang, "downgrade.prompt", &[]);
+    let using = crate::locale::text(lang, "picker.using", &[("helper", helper)]);
     let header =
-        format!("Tab:多选 | Enter:降级 | Esc:退出 | \x1b[33mUsing downgrade & {helper}\x1b[0m");
+        format!("\x1b[1;33m{title}\x1b[0m  \x1b[33m{using}\x1b[0m\n\x1b[2m{actions}\x1b[0m");
     let mut args = vec!["--multi"];
     args.extend_from_slice(COMMON_FZF_LAYOUT_ARGS);
     args.extend([
         "--header",
         header.as_str(),
         "--prompt",
-        "待降级项目 > ",
+        prompt.as_str(),
         "--nth",
         "2",
         "--id-nth",
@@ -70,7 +76,7 @@ pub fn run(query: &[String]) -> Result<()> {
         .write_all(installed.as_bytes())?;
     let output = child.wait_with_output()?;
     if !classify_picker_status(output.status, "downgrade")? {
-        println!("{NO_SELECTION}");
+        println!("{}", crate::locale::text(lang, "downgrade.none", &[]));
         return Ok(());
     }
     let selected = String::from_utf8(output.stdout).context("fzf returned invalid UTF-8")?;
@@ -79,14 +85,21 @@ pub fn run(query: &[String]) -> Result<()> {
         .filter_map(|line| line.split_whitespace().nth(1))
         .collect();
     if packages.is_empty() {
-        println!("{NO_SELECTION}");
+        println!("{}", crate::locale::text(lang, "downgrade.none", &[]));
         return Ok(());
     }
     println!(
-        "\x1b[33mPreparing to downgrade:\x1b[0m {}",
-        packages.join(" ")
+        "\x1b[33m{}\x1b[0m",
+        crate::locale::text(
+            lang,
+            "downgrade.prepare",
+            &[("packages", &packages.join(" "))]
+        )
     );
-    println!("\x1b[1;31mWARNING:\x1b[0m downgrading core libraries can break the system.");
+    println!(
+        "\x1b[1;31m{}\x1b[0m",
+        crate::locale::text(lang, "downgrade.warning", &[])
+    );
     print_summary("downgrade", "downgrade", "sudo", &packages);
     let mut command = vec!["downgrade"];
     command.extend(packages);
@@ -127,13 +140,25 @@ fn write_row(row: &mut String, source: &str, name: &str, version: &str) {
     const SPACES: &str = "                                                                ";
     let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source));
     let name_padding = 30usize.saturating_sub(UnicodeWidthStr::width(name));
+    let source_color = if source == "aur" {
+        crate::ui::source_color(PackageSource::Aur)
+    } else {
+        crate::ui::source_color(PackageSource::Pacman)
+    };
+    row.push_str("\x1b[");
+    row.push_str(source_color);
+    row.push('m');
     row.push_str(source);
     row.push_str(&SPACES[..source_padding.min(SPACES.len())]);
-    row.push(' ');
+    row.push_str("\x1b[0m ");
+    row.push_str("\x1b[1m");
     row.push_str(name);
+    row.push_str("\x1b[0m");
     row.push_str(&SPACES[..name_padding.min(SPACES.len())]);
     row.push(' ');
+    row.push_str("\x1b[2m");
     row.push_str(version);
+    row.push_str("\x1b[0m");
 }
 
 #[cfg(test)]
@@ -144,6 +169,8 @@ mod tests {
     #[test]
     fn downgrade_columns_use_terminal_width_and_do_not_clip_long_versions() {
         let row = render_row("仓库", "示例包", "版本-超长-版本-1");
+        assert!(row.contains("\x1b[34m"));
+        let row = crate::ui::strip_ansi(&row);
         let mut columns = row.split_whitespace();
         assert_eq!(columns.next(), Some("仓库"));
         assert_eq!(columns.next(), Some("示例包"));
