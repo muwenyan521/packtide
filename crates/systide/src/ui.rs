@@ -119,13 +119,13 @@ fn append_source_rows(
     }
 }
 
-pub(crate) fn show_update_list(lang: Lang) -> Result<bool> {
+pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
     let picker_started = Instant::now();
     require_command_for("fzf", "the system update list picker", false)?;
     let rows = collect_update_rows()?;
     if rows.is_empty() {
         println!("{}", msg(lang, "list.empty"));
-        return Ok(false);
+        return Ok(None);
     }
     if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
@@ -168,6 +168,7 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<bool> {
     }
     let status = child.wait()?;
     classify_fzf_status(status)
+        .map(Some)
         .map_err(|error| anyhow::anyhow!("system update list picker failed: {error}"))
 }
 

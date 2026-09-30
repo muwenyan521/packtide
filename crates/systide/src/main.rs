@@ -31,9 +31,15 @@ fn main() -> Result<()> {
         bail!("--news-source must be official or cn");
     }
     let lang = language(&cli.ui_lang)?;
-    if cli.list && !show_update_list(lang)? {
-        println!("{}", msg(lang, "cancel"));
-        return Ok(());
+    if cli.list {
+        match show_update_list(lang)? {
+            Some(true) => {}
+            Some(false) => {
+                println!("{}", msg(lang, "cancel"));
+                return Ok(());
+            }
+            None => return Ok(()),
+        }
     }
     print_intro(lang);
     require_privileged()?;
