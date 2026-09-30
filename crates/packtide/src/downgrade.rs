@@ -80,10 +80,7 @@ pub fn run(query: &[String]) -> Result<()> {
         return Ok(());
     }
     let selected = String::from_utf8(output.stdout).context("fzf returned invalid UTF-8")?;
-    let packages: Vec<_> = selected
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .collect();
+    let packages = selected_packages(&selected);
     if packages.is_empty() {
         println!("{}", crate::locale::text(lang, "downgrade.none", &[]));
         return Ok(());
@@ -100,11 +97,25 @@ pub fn run(query: &[String]) -> Result<()> {
         "\x1b[1;31m{}\x1b[0m",
         crate::locale::text(lang, "downgrade.warning", &[])
     );
-    print_summary("downgrade", "downgrade", "sudo", &packages);
-    let mut command = vec!["downgrade"];
-    command.extend(packages);
+    let command = transaction_args(&packages);
+    let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
+    print_summary("downgrade", "downgrade", "sudo", &targets);
     run_privileged(&command)?;
     Ok(())
+}
+
+fn selected_packages(selected: &str) -> Vec<String> {
+    selected
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn transaction_args(packages: &[String]) -> Vec<String> {
+    std::iter::once("downgrade".to_owned())
+        .chain(packages.iter().cloned())
+        .collect()
 }
 
 fn rows() -> Result<String> {
@@ -163,7 +174,7 @@ fn write_row(row: &mut String, source: &str, name: &str, version: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::render_row;
+    use super::{render_row, selected_packages, transaction_args};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -178,5 +189,13 @@ mod tests {
         assert_eq!(version, "版本-超长-版本-1");
         assert!(UnicodeWidthStr::width(version) > 0);
         assert!(row.contains("示例包"));
+    }
+
+    #[test]
+    fn accepted_rows_keep_names_and_build_exact_transaction_argv() {
+        let selected = "core  bash 5.3-1\nextra  gcc 15.1-1\n";
+        let packages = selected_packages(selected);
+        assert_eq!(packages, ["bash", "gcc"]);
+        assert_eq!(transaction_args(&packages), ["downgrade", "bash", "gcc"]);
     }
 }
