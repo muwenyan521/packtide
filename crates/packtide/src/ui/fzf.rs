@@ -59,13 +59,15 @@ pub(crate) fn select_install_catalog_streaming(
             if rows_started {
                 stdin.write_all(b"\n")?;
             }
-            super::rows::write_package_row(stdin, record, super::rows::PackageListMode::Install)?;
+            super::rows::write_package_row(stdin, record, super::rows::PackageListMode::Install)
+                .context("failed writing package row to fzf")?;
             rows_started = true;
             Ok(())
         })?;
         timing_event("official_done", source_started);
         timing_event("aur_start", source_started);
-        super::rows::write_aur_install_rows(&catalog, stdin, rows_started)?;
+        super::rows::write_aur_install_rows(&catalog, stdin, rows_started)
+            .context("failed writing AUR rows to fzf")?;
         timing_event("aur_done", source_started);
         Ok(())
     })
