@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use system_tools_core::{PackageSource, run_capture};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::sources::valid_package_name;
 
@@ -54,9 +55,13 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "-")
         .unwrap_or("unknown");
-    println!(
-        "\x1b[1;36m{package}\x1b[0m  \x1b[2m{source_label} · {version}\x1b[0m\n\x1b[2m────────────────────────────────────────\x1b[0m"
-    );
+    let width = std::env::var("FZF_PREVIEW_COLUMNS")
+        .or_else(|_| std::env::var("COLUMNS"))
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|width| *width > 0)
+        .unwrap_or(80);
+    println!("{}", preview_header(package, &source_label, version, width));
     if output.stdout.trim().is_empty() {
         println!("{}", crate::locale::text(lang, "preview.empty", &[]));
     } else {
@@ -75,6 +80,43 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn preview_header(package: &str, source: &str, version: &str, width: usize) -> String {
+    let details = format!("{source} · {version}");
+    let name_width = UnicodeWidthStr::width(package);
+    let details_width = UnicodeWidthStr::width(details.as_str());
+    let (name, details) = if name_width + details_width + 2 <= width {
+        (package.to_owned(), details)
+    } else {
+        let name_budget = name_width.min(width.saturating_sub(2) / 2);
+        let details_budget = width.saturating_sub(name_budget + 2);
+        (
+            truncate_display(package, name_budget),
+            truncate_display(&details, details_budget),
+        )
+    };
+    let separator = "─".repeat(width.min(40));
+    format!("\x1b[1;36m{name}\x1b[0m  \x1b[2m{details}\x1b[0m\n\x1b[2m{separator}\x1b[0m")
+}
+
+fn truncate_display(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.to_owned();
+    }
+    let content_width = width.saturating_sub(3);
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in value.chars() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + char_width > content_width {
+            break;
+        }
+        result.push(ch);
+        used += char_width;
+    }
+    result.push_str(&".".repeat(width.saturating_sub(used)));
+    result
 }
 
 fn colorize_metadata(output: &str) -> String {
@@ -116,7 +158,8 @@ pub(crate) fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::colorize_metadata;
+    use super::{colorize_metadata, preview_header};
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn colors_pacman_metadata_labels_without_changing_values() {
@@ -132,5 +175,20 @@ mod tests {
         let rendered = colorize_metadata("\x1b[1mName\x1b[0m : \x1b[32mbash\x1b[0m\n");
         assert!(rendered.contains("\x1b[1;36mName\x1b[0m : \x1b[32mbash\x1b[0m"));
         assert!(!rendered.contains("\x1b[1;36m\x1b[1mName"));
+    }
+
+    #[test]
+    fn preview_header_fits_narrow_windows_without_changing_package_identity() {
+        let header = preview_header("示例软件包-very-long-name", "官方源", "2026.09.30-long", 24);
+        let lines = header
+            .lines()
+            .map(crate::ui::strip_ansi)
+            .collect::<Vec<_>>();
+        assert!(
+            lines
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24)
+        );
+        assert!(lines[0].contains("..."));
     }
 }
