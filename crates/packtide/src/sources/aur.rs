@@ -68,8 +68,10 @@ fn fetch_and_store(cache: &CacheStore) -> Result<String> {
         .timeout_global(Some(Duration::from_secs(45)))
         .build()
         .new_agent();
+    let endpoint = env::var("PACKTIDE_AUR_PACKAGES_URL")
+        .unwrap_or_else(|_| "https://aur.archlinux.org/packages.gz".to_owned());
     let response = agent
-        .get("https://aur.archlinux.org/packages.gz")
+        .get(&endpoint)
         .call()
         .context("AUR package list unavailable")?;
     const DOWNLOAD_LIMIT: u64 = 32 * 1024 * 1024;
