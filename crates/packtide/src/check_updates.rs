@@ -126,12 +126,6 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
             item.version.as_deref().unwrap_or("")
         );
     }
-    if updates.is_empty() {
-        println!(
-            "{}",
-            crate::locale::text(crate::locale::current(), "updates.empty", &[])
-        );
-    }
     Ok(())
 }
 
