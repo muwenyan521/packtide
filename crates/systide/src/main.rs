@@ -27,11 +27,11 @@ fn main() -> Result<()> {
         print!("{}", collect_update_rows()?);
         return Ok(());
     }
-    let lang = language(&cli.ui_lang)?;
     if !matches!(cli.news_source.as_str(), "official" | "cn") {
         bail!("--news-source must be official or cn");
     }
-    if cli.list && !show_update_list()? {
+    let lang = language(&cli.ui_lang)?;
+    if cli.list && !show_update_list(lang)? {
         println!("{}", msg(lang, "cancel"));
         return Ok(());
     }

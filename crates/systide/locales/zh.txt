@@ -18,3 +18,7 @@ keyring_ok=数据库与密钥环已同步。
 keyring_warn=密钥环更新遇到问题，继续尝试系统更新...
 grub_ok=GRUB 更新成功。
 grub_fail=GRUB 更新失败。
+list.prompt=待更新项目 >
+list.refresh=正在拉取最新数据... >
+list.header=Esc:退出 | Enter:更新系统 | Ctrl+R:强制刷新
+list.empty=没有可用更新。

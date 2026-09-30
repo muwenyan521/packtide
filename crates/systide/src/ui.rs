@@ -1,3 +1,4 @@
+use crate::messages::{Lang, msg};
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -81,13 +82,13 @@ pub(crate) fn collect_update_rows() -> Result<String> {
         ))
     })?;
     if let Some(output) = repo {
-        append_source_rows(&mut rows, &mut seen, "pacman", "34", &output);
+        append_source_rows(&mut rows, &mut seen, "Pacman", "34", &output);
     }
     if let Some(output) = aur {
-        append_source_rows(&mut rows, &mut seen, "aur", "35", &output);
+        append_source_rows(&mut rows, &mut seen, "AUR", "35", &output);
     }
     if let Some(output) = flatpak {
-        append_source_rows(&mut rows, &mut seen, "flatpak", "36", &output);
+        append_source_rows(&mut rows, &mut seen, "Flatpak", "36", &output);
     }
     Ok(rows)
 }
@@ -118,7 +119,7 @@ fn append_source_rows(
     }
 }
 
-pub(crate) fn show_update_list() -> Result<bool> {
+pub(crate) fn show_update_list(lang: Lang) -> Result<bool> {
     let picker_started = Instant::now();
     require_command_for("fzf", "the system update list picker", false)?;
     let rows = collect_update_rows()?;
@@ -134,7 +135,9 @@ pub(crate) fn show_update_list() -> Result<bool> {
         shell_quote(executable.to_string_lossy().as_ref())
     );
     let bind = format!(
-        "ctrl-r:change-prompt(正在拉取最新数据... > )+reload-sync({reload})+change-prompt(待更新项目 > )"
+        "ctrl-r:change-prompt({})+reload-sync({reload})+change-prompt({})",
+        msg(lang, "list.refresh"),
+        msg(lang, "list.prompt")
     );
     let mut args = COMMON_FZF_LAYOUT_ARGS.to_vec();
     args.extend([
@@ -143,8 +146,9 @@ pub(crate) fn show_update_list() -> Result<bool> {
         "--id-nth=2",
         "--track",
         "--prompt",
-        "待更新项目 > ",
-        "--header=ESC退出 | Enter更新系统 | Ctrl+R强制刷新",
+        msg(lang, "list.prompt"),
+        "--header",
+        msg(lang, "list.header"),
         "--bind",
         bind.as_str(),
     ]);

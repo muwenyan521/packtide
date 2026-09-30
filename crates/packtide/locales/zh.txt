@@ -17,3 +17,7 @@ preview.failed=预览获取失败：{error}
 source.pacman=官方源
 source.aur=AUR
 source.flatpak=Flatpak
+updates.prompt=待更新项目 >
+updates.refresh=正在拉取最新数据... >
+updates.header=Esc:退出 | Enter:更新系统 | Ctrl+R:强制刷新
+updates.empty=没有可用更新。

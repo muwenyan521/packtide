@@ -18,3 +18,7 @@ keyring_ok=DB & Keyrings synced.
 keyring_warn=Keyring issues detected...
 grub_ok=GRUB updated.
 grub_fail=GRUB update failed.
+list.prompt=Updates available >
+list.refresh=Fetching latest updates... >
+list.header=Esc:exit | Enter:update system | Ctrl+R:refresh
+list.empty=No updates found.

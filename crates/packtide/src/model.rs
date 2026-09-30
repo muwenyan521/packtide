@@ -81,14 +81,51 @@ pub(crate) fn render_update_rows(updates: &[PackageUpdate]) -> String {
             rows.push('\n');
         }
         let color = crate::ui::source_color(item.source);
+        let source_label = match item.source {
+            UpdateSource::Pacman => "Pacman",
+            UpdateSource::Aur => "AUR",
+            UpdateSource::Flatpak => "Flatpak",
+        };
         write!(
             rows,
             "\x1b[{color}m[{:<7}]\x1b[0m\t{}\t{}",
-            item.source.as_str(),
-            item.name,
-            item.display
+            source_label, item.name, item.display
         )
         .expect("writing update row to String cannot fail");
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PackageUpdate, render_update_rows};
+    use system_tools_core::PackageSource;
+
+    #[test]
+    fn update_rows_use_stable_title_case_source_labels() {
+        let rows = render_update_rows(&[
+            PackageUpdate {
+                source: PackageSource::Pacman,
+                name: "bash".to_owned(),
+                version: Some("5.3".to_owned()),
+                display: "bash 5.3".to_owned(),
+            },
+            PackageUpdate {
+                source: PackageSource::Aur,
+                name: "tool".to_owned(),
+                version: Some("1.0".to_owned()),
+                display: "tool 1.0".to_owned(),
+            },
+            PackageUpdate {
+                source: PackageSource::Flatpak,
+                name: "org.example.App".to_owned(),
+                version: Some("2.0".to_owned()),
+                display: "org.example.App 2.0".to_owned(),
+            },
+        ]);
+        let plain = crate::ui::strip_ansi(&rows);
+        assert!(plain.contains("[Pacman "));
+        assert!(plain.contains("[AUR    "));
+        assert!(plain.contains("[Flatpak]"));
+    }
 }

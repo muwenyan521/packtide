@@ -64,9 +64,14 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
             "PACKTIDE_UPDATE_LIST_ONLY=1 {} check-updates --refresh",
             shell_quote(executable.to_string_lossy().as_ref())
         );
+        let lang = crate::locale::current();
         let bind = format!(
-            "ctrl-r:change-prompt(正在拉取最新数据... > )+reload-sync({refresh_command})+change-prompt(待更新项目 > )"
+            "ctrl-r:change-prompt({})+reload-sync({refresh_command})+change-prompt({})",
+            crate::locale::text(lang, "updates.refresh", &[]),
+            crate::locale::text(lang, "updates.prompt", &[])
         );
+        let header = crate::locale::text(lang, "updates.header", &[]);
+        let prompt = crate::locale::text(lang, "updates.prompt", &[]);
         let start_reload = background_refresh.then(|| format!("start:reload({refresh_command})"));
         let mut args = COMMON_FZF_LAYOUT_ARGS.to_vec();
         args.extend([
@@ -75,8 +80,10 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
             "--id-nth=2",
             "--track",
             "--info=inline",
-            "--header=ESC退出 | Enter更新系统 | Ctrl+R强制刷新",
-            "--prompt=待更新项目 > ",
+            "--header",
+            header.as_str(),
+            "--prompt",
+            prompt.as_str(),
             "--bind",
             bind.as_str(),
         ]);
@@ -100,15 +107,23 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         return Ok(());
     }
     for item in &updates {
+        let source = match item.source {
+            PackageSource::Pacman => "Pacman",
+            PackageSource::Aur => "AUR",
+            PackageSource::Flatpak => "Flatpak",
+        };
         println!(
             "[{:<7}] {} {}",
-            item.source.as_str(),
+            source,
             item.name,
             item.version.as_deref().unwrap_or("")
         );
     }
     if updates.is_empty() {
-        println!("No updates found.");
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "updates.empty", &[])
+        );
     }
     Ok(())
 }

@@ -17,3 +17,7 @@ preview.failed=Preview failed: {error}
 source.pacman=Pacman
 source.aur=AUR
 source.flatpak=Flatpak
+updates.prompt=Updates available >
+updates.refresh=Fetching latest updates... >
+updates.header=Esc:exit | Enter:update system | Ctrl+R:refresh
+updates.empty=No updates found.
