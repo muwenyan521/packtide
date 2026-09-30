@@ -285,6 +285,77 @@ fn install_selection_preserves_repository_and_aur_transaction_arguments() {
 }
 
 #[test]
+fn install_fake_picker_covers_preview_accept_and_transaction_argv() {
+    let fixture = Fixture::new();
+    let fzf_args = fixture.path().join("fzf.args");
+    let preview_output = fixture.path().join("preview.out");
+    let row_output = fixture.path().join("row.out");
+    let command_output = fixture.path().join("command.out");
+    let transaction_argv = fixture.path().join("paru.transaction.argv");
+    let cache = fixture.path().join("cache");
+    let aur_cache = cache.join("packtide/aur");
+    fs::create_dir_all(&aur_cache).expect("create AUR cache fixture");
+    fs::write(aur_cache.join("packages"), "").expect("write empty AUR cache");
+
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$1:$2\" in\n  --color=never:-Sl) printf 'core bash 5.3-1\\n' ;;\n  -Qq:) exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable(
+        "paru",
+        &format!(
+            "#!/bin/sh\ncase \"$1:$2\" in\n  --color=always:-Si) printf 'Name : bash\\nVersion : 5.3-1\\nDescription : shell\\n' ;;\n  -S:core/bash) printf '%s\\n' \"$@\" > '{}' ;;\n  *) exit 64 ;;\nesac\n",
+            transaction_argv.display()
+        ),
+    );
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/bash\nprintf '%s\\n' \"$@\" > '{}'\ninput=$(cat)\nrow=$(printf '%s\\n' \"$input\" | /usr/bin/awk '/bash/{{print; exit}}')\nprintf '%s\\n' \"$row\" > '{}'\npreview=''\nexpect_preview=0\nfor arg in \"$@\"; do\n  if [ \"$expect_preview\" = 1 ]; then preview=\"$arg\"; expect_preview=0; elif [ \"$arg\" = \"--preview\" ]; then expect_preview=1; fi\ndone\nprintf '%s\\n' \"$preview\" > '{}'\nprintf -v quoted '%q' \"$row\"\nplaceholder='\"{{}}\"'\ncommand=\"${{preview//$placeholder/$quoted}}\"\nprintf '%s\\n' \"$command\" >> '{}'\n/bin/bash -c \"$command\" > '{}' 2>&1\nprintf '%s\\n' \"$row\"\n",
+            fzf_args.display(),
+            row_output.display(),
+            command_output.display(),
+            command_output.display(),
+            preview_output.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["install"])
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run install with full fake picker path");
+
+    assert!(
+        output.status.success(),
+        "install failed; stderr: {}; stdout: {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let args = fs::read_to_string(fzf_args).expect("read fake fzf argv");
+    assert!(args.contains("--preview"));
+    assert!(args.contains("__preview install"));
+    assert!(args.contains("--no-wrap"));
+    assert!(args.contains("--ellipsis=..."));
+    assert!(args.contains("alt-j:last,alt-k:first"));
+    let row = fs::read_to_string(row_output).expect("read selected row");
+    let command = fs::read_to_string(command_output).expect("read preview command");
+    let preview = fs::read_to_string(preview_output).expect("read preview output");
+    assert!(
+        preview.contains("bash"),
+        "row={row:?} command={command:?} preview output was {preview:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(transaction_argv).expect("read transaction argv"),
+        "-S\ncore/bash\n"
+    );
+}
+
+#[test]
 fn install_picker_starts_before_package_sources_finish() {
     let fixture = Fixture::new();
     let fzf_started = fixture.path().join("fzf.started");
