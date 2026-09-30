@@ -370,6 +370,47 @@ fn install_catalog_failure_is_not_reported_as_no_selection() {
 }
 
 #[test]
+fn empty_install_catalog_is_distinct_from_fzf_cancellation() {
+    let fixture = Fixture::new();
+    let cache = fixture.path().join("cache");
+    let aur_cache = cache.join("packtide/aur");
+    fs::create_dir_all(&aur_cache).expect("create isolated AUR cache");
+    fs::write(aur_cache.join("packages"), "").expect("write empty AUR cache");
+    let fzf_called = fixture.path().join("fzf.called");
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$1:$2\" in\n  -Qq:) exit 0 ;;\n  --color=never:-Sl) exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable("paru", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\n: > '{}'\ncat >/dev/null\nexit 1\n",
+            fzf_called.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["install"])
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run install with empty package catalog");
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("No packages available for installation.")
+    );
+    assert!(
+        fzf_called.exists(),
+        "picker should still own empty-state rendering"
+    );
+}
+
+#[test]
 fn install_preview_covers_success_empty_and_failure_states() {
     let cases = [
         (

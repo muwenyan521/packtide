@@ -2,6 +2,10 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::current_executable;
@@ -36,7 +40,7 @@ pub(crate) fn select_rows(
     if rows.is_empty() {
         return Ok(Some(String::new()));
     }
-    select_rows_with_input(helper, removing, query, started, move |stdin| {
+    select_rows_with_input(helper, removing, query, started, None, move |stdin| {
         stdin.write_all(rows.as_bytes())?;
         Ok(())
     })
@@ -50,30 +54,52 @@ pub(crate) fn select_install_catalog_streaming(
     started: Option<SystemTime>,
 ) -> Result<Option<String>> {
     let pacman = pacman.to_path_buf();
-    select_rows_with_input(helper, false, query, started, move |stdin| {
-        let source_started = Instant::now();
-        let mut official_first = false;
-        let mut rows_started = false;
-        let catalog = crate::sources::install_rows_streaming(&pacman, refresh, false, |record| {
-            if !official_first {
-                timing_event("official_first", source_started);
-                official_first = true;
+    let has_rows = Arc::new(AtomicBool::new(false));
+    let writer_has_rows = Arc::clone(&has_rows);
+    select_rows_with_input(
+        helper,
+        false,
+        query,
+        started,
+        Some(has_rows),
+        move |stdin| {
+            let source_started = Instant::now();
+            let mut official_first = false;
+            let mut rows_started = false;
+            let catalog =
+                crate::sources::install_rows_streaming(&pacman, refresh, false, |record| {
+                    if !official_first {
+                        timing_event("official_first", source_started);
+                        official_first = true;
+                    }
+                    writer_has_rows.store(true, Ordering::Release);
+                    if rows_started {
+                        stdin.write_all(b"\n")?;
+                    }
+                    super::rows::write_package_row(
+                        stdin,
+                        record,
+                        super::rows::PackageListMode::Install,
+                    )
+                    .context("failed writing package row to fzf")?;
+                    rows_started = true;
+                    Ok(())
+                })?;
+            timing_event("official_done", source_started);
+            timing_event("aur_start", source_started);
+            super::rows::write_aur_install_rows(&catalog, stdin, rows_started)
+                .context("failed writing AUR rows to fzf")?;
+            if catalog
+                .aur_names
+                .lines()
+                .any(crate::sources::valid_package_name)
+            {
+                writer_has_rows.store(true, Ordering::Release);
             }
-            if rows_started {
-                stdin.write_all(b"\n")?;
-            }
-            super::rows::write_package_row(stdin, record, super::rows::PackageListMode::Install)
-                .context("failed writing package row to fzf")?;
-            rows_started = true;
+            timing_event("aur_done", source_started);
             Ok(())
-        })?;
-        timing_event("official_done", source_started);
-        timing_event("aur_start", source_started);
-        super::rows::write_aur_install_rows(&catalog, stdin, rows_started)
-            .context("failed writing AUR rows to fzf")?;
-        timing_event("aur_done", source_started);
-        Ok(())
-    })
+        },
+    )
 }
 
 fn timing_event(phase: &str, started: Instant) {
@@ -90,6 +116,7 @@ fn select_rows_with_input(
     removing: bool,
     query: &[String],
     started: Option<SystemTime>,
+    rows_available: Option<Arc<AtomicBool>>,
     write_input: impl FnOnce(&mut dyn Write) -> Result<()> + Send + 'static,
 ) -> Result<Option<String>> {
     let executable = current_executable()?;
@@ -243,14 +270,14 @@ fn select_rows_with_input(
         let _ = writer_tx.send(result);
     });
     let output = child.wait_with_output()?;
-    match writer_rx.try_recv() {
+    match writer_rx.recv_timeout(std::time::Duration::from_millis(50)) {
         Ok(Err(error))
             if error
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::BrokenPipe) => {}
         Ok(result) => result?,
-        Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             anyhow::bail!("fzf input writer terminated unexpectedly");
         }
     }
@@ -269,6 +296,9 @@ fn select_rows_with_input(
         let _ = fs::remove_file(marker);
     }
     if !classify_picker_status(output.status, mode)? {
+        if rows_available.is_some_and(|rows| !rows.load(Ordering::Acquire)) {
+            return Ok(Some(String::new()));
+        }
         return Ok(None);
     }
     String::from_utf8(output.stdout)
