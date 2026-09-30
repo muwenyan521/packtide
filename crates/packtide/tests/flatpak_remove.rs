@@ -449,6 +449,29 @@ fn install_preview_covers_success_empty_and_failure_states() {
 }
 
 #[test]
+fn install_preview_preserves_colored_helper_sections_and_strips_osc_labels() {
+    let fixture = Fixture::new();
+    fixture.write_executable(
+        "paru",
+        "#!/bin/sh\nprintf '\\033[1;35mOptional Dependencies\\033[0m\\n\\033]8;;https://example.test\\007Name\\033]8;;\\007 : bash\\n'\n",
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["__preview", "install", "core\tbash\t5.3-1"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run helper section preview");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[1;35mOptional Dependencies\x1b[0m"));
+    assert!(stdout.contains("\x1b[1;36mName\x1b[0m : bash"));
+    assert!(!stdout.contains("\x1b]8;;https://example.test"));
+}
+
+#[test]
 fn install_falls_back_to_yay_when_paru_is_unavailable() {
     let fixture = Fixture::new();
     let yay_argv = fixture.path().join("yay.argv");
