@@ -543,6 +543,36 @@ fn downgrade_picker_uses_localized_header_and_source_colors() {
 }
 
 #[test]
+fn downgrade_preview_runs_helper_with_color_and_renders_metadata() {
+    let fixture = Fixture::new();
+    let helper_args = fixture.path().join("paru.argv");
+    fixture.write_executable(
+        "paru",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '\\033[1mName\\033[0m : bash\\nVersion : 5.3-1\\n'\n",
+            helper_args.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["__preview", "downgrade", "core\tbash\t5.3-1"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run downgrade preview");
+
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(helper_args).expect("read helper argv"),
+        "--color=always\n-Qi\nbash\n"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[1;36mName\x1b[0m : bash"));
+    assert!(stdout.contains("\x1b[1;36mVersion\x1b[0m : 5.3-1"));
+}
+
+#[test]
 fn mirror_update_missing_reflector_names_the_affected_operation() {
     assert_missing_required_command("mirror-update", "reflector", "the mirror list update");
 }
