@@ -86,6 +86,7 @@ fn colorize_metadata(output: &str) -> String {
             rendered.push('\n');
         }
         if let Some((label, separator, value)) = split_metadata_line(line) {
+            let label = super::strip_ansi(label);
             write!(rendered, "\x1b[1;36m{label}\x1b[0m{separator}{value}")
                 .expect("writing preview metadata to String cannot fail");
         } else {
@@ -124,5 +125,12 @@ mod tests {
         assert!(rendered.contains("\x1b[1;36mArchitecture\x1b[0m : x86_64"));
         assert!(colorize_metadata("Name: bash\n").contains("\x1b[1;36mName\x1b[0m: bash"));
         assert!(colorize_metadata("描述：shell\n").contains("\x1b[1;36m描述\x1b[0m：shell"));
+    }
+
+    #[test]
+    fn strips_ansi_from_metadata_labels_but_preserves_colored_values() {
+        let rendered = colorize_metadata("\x1b[1mName\x1b[0m : \x1b[32mbash\x1b[0m\n");
+        assert!(rendered.contains("\x1b[1;36mName\x1b[0m : \x1b[32mbash\x1b[0m"));
+        assert!(!rendered.contains("\x1b[1;36m\x1b[1mName"));
     }
 }
