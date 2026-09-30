@@ -370,6 +370,44 @@ fn install_catalog_failure_is_not_reported_as_no_selection() {
 }
 
 #[test]
+fn install_preview_covers_success_empty_and_failure_states() {
+    let cases = [
+        (
+            "success",
+            "printf 'Name : bash\\nVersion : 5.3-1\\n'",
+            true,
+            "Name",
+        ),
+        ("empty", "exit 0", true, "No details available."),
+        (
+            "failure",
+            "printf 'lookup failed\\n' >&2; exit 17",
+            true,
+            "Preview failed",
+        ),
+    ];
+    for (label, body, expected_success, expected_text) in cases {
+        let fixture = Fixture::new();
+        fixture.write_executable("paru", &format!("#!/bin/sh\n{body}\n"));
+        let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("build isolated PATH");
+        let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+            .args(["__preview", "install", "core\tbash\t5.3-1"])
+            .env("PATH", path)
+            .env("PACKTIDE_UI_LANG", "en")
+            .output()
+            .unwrap_or_else(|error| panic!("run {label} preview: {error}"));
+
+        assert_eq!(output.status.success(), expected_success, "case={label}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(expected_text),
+            "case={label} stdout={stdout}"
+        );
+    }
+}
+
+#[test]
 fn install_falls_back_to_yay_when_paru_is_unavailable() {
     let fixture = Fixture::new();
     let yay_argv = fixture.path().join("yay.argv");
