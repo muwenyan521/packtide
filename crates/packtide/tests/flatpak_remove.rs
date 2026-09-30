@@ -437,7 +437,8 @@ fn install_catalog_failure_is_not_reported_as_no_selection() {
         !output.status.success(),
         "source failure was hidden as cancellation"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pacman catalog exited"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("! Package source failed: pacman catalog exited"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("No packages selected"));
 }
 
