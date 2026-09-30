@@ -98,6 +98,14 @@ mod tests {
             text(Lang::Zh, "picker.using", &[("helper", "paru")]),
             "使用 paru"
         );
+        assert_eq!(
+            text(Lang::En, "preview.unknown_kind", &[("kind", "bogus")]),
+            "Unknown preview kind: bogus"
+        );
+        assert_eq!(
+            text(Lang::Zh, "preview.missing_package", &[]),
+            "预览需要软件包名称。"
+        );
         assert!(text(Lang::Zh, "preview.failed", &[("error", "timeout")]).contains("timeout"));
     }
 }

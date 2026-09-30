@@ -14,11 +14,15 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         .as_ref()
         .map(|row| row.name.as_str())
         .unwrap_or_default();
+    let lang = crate::locale::current();
     if package.is_empty() {
-        bail!("preview requires a package name");
+        bail!(
+            "{}",
+            crate::locale::text(lang, "preview.missing_package", &[])
+        );
     }
     if !valid_package_name(package) {
-        bail!("preview received an invalid package row");
+        bail!("{}", crate::locale::text(lang, "preview.invalid_row", &[]));
     }
     let source = parsed.as_ref().map(|row| row.source);
     let helper = crate::app::package_helper().unwrap_or("paru");
@@ -27,7 +31,10 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         ("remove", Some(PackageSource::Pacman | PackageSource::Aur))
         | ("downgrade", Some(_))
         | ("install", Some(_)) => helper,
-        _ => bail!("unknown preview kind: {kind}"),
+        _ => bail!(
+            "{}",
+            crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
+        ),
     };
     let mut operation = match (kind, source) {
         ("remove", Some(PackageSource::Flatpak)) => vec!["info", package],
@@ -35,13 +42,15 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
             vec!["-Qi", package]
         }
         ("install", Some(_)) => vec!["-Si", package],
-        _ => bail!("unknown preview kind: {kind}"),
+        _ => bail!(
+            "{}",
+            crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
+        ),
     };
     if source != Some(PackageSource::Flatpak) {
         operation.insert(0, "--color=always");
     }
     let output = run_capture(program, &operation, true)?;
-    let lang = crate::locale::current();
     let source_key = match source {
         Some(PackageSource::Pacman) => "source.pacman",
         Some(PackageSource::Aur) => "source.aur",
@@ -49,19 +58,17 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         None => "source.pacman",
     };
     let source_label = crate::locale::text(lang, source_key, &[]);
-    let version = parsed
-        .as_ref()
-        .and_then(|_| raw_row.split('\t').nth(2))
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "-")
-        .unwrap_or("unknown");
+    let version = preview_version(raw_row);
     let width = std::env::var("FZF_PREVIEW_COLUMNS")
         .or_else(|_| std::env::var("COLUMNS"))
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|width| *width > 0)
         .unwrap_or(80);
-    println!("{}", preview_header(package, &source_label, version, width));
+    println!(
+        "{}",
+        preview_header(package, &source_label, &version, width)
+    );
     if output.stdout.trim().is_empty() {
         println!("{}", crate::locale::text(lang, "preview.empty", &[]));
     } else {
@@ -80,6 +87,30 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn strip_outer_quotes(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+    {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
+}
+
+fn preview_version(raw_row: &str) -> String {
+    let stripped = super::strip_ansi(raw_row);
+    let clean_row = strip_outer_quotes(&stripped);
+    clean_row
+        .split('\t')
+        .nth(2)
+        .and_then(|value| value.split_whitespace().next())
+        .filter(|value| !value.is_empty() && *value != "-")
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 fn preview_header(package: &str, source: &str, version: &str, width: usize) -> String {
@@ -158,7 +189,7 @@ pub(crate) fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{colorize_metadata, preview_header};
+    use super::{colorize_metadata, preview_header, preview_version};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -197,5 +228,11 @@ mod tests {
                 .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24)
         );
         assert!(lines[0].contains("..."));
+    }
+
+    #[test]
+    fn preview_version_ignores_shell_quotes_ansi_and_install_badge() {
+        let row = "'\x1b[34mcore            \x1b[0m\tbash                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m✔ [Installed]\x1b[0m'";
+        assert_eq!(preview_version(row), "5.3-1");
     }
 }
