@@ -33,6 +33,9 @@ pub(crate) fn select_rows(
     query: &[String],
     started: Option<SystemTime>,
 ) -> Result<Option<String>> {
+    if rows.is_empty() {
+        return Ok(Some(String::new()));
+    }
     select_rows_with_input(helper, removing, query, started, move |stdin| {
         stdin.write_all(rows.as_bytes())?;
         Ok(())

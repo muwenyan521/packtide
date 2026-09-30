@@ -35,6 +35,13 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         );
         return Ok(());
     };
+    if selected.is_empty() {
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "selection.remove.empty", &[])
+        );
+        return Ok(());
+    }
     let mut pacman = Vec::new();
     let mut flatpak = Vec::new();
     for row in selected.lines() {

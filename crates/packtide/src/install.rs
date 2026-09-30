@@ -54,6 +54,13 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         );
         return Ok(());
     };
+    if selected.is_empty() {
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "selection.install.empty", &[])
+        );
+        return Ok(());
+    }
     let mut repo = Vec::new();
     let mut aur = Vec::new();
     for row in selected.lines() {
