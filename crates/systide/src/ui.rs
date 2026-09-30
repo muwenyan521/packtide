@@ -123,6 +123,10 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<bool> {
     let picker_started = Instant::now();
     require_command_for("fzf", "the system update list picker", false)?;
     let rows = collect_update_rows()?;
+    if rows.is_empty() {
+        println!("{}", msg(lang, "list.empty"));
+        return Ok(false);
+    }
     if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
             "picker_timing picker=systide-list phase=prepared elapsed_ms={}",

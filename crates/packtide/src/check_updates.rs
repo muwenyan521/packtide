@@ -57,6 +57,13 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         println!("{}", render_update_rows(&updates));
         return Ok(());
     }
+    if updates.is_empty() {
+        println!(
+            "{}",
+            crate::locale::text(crate::locale::current(), "updates.empty", &[])
+        );
+        return Ok(());
+    }
     if interactive {
         let rows = render_update_rows(&updates);
         let executable = current_executable()?;
