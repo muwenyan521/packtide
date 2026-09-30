@@ -111,6 +111,7 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     assert!(arguments.contains("PACKTIDE · 卸载软件包"));
     assert!(!arguments.contains("PACKTIDE · 安装软件包"));
     assert!(arguments.contains("\x1b[1;33mPACKTIDE · 卸载软件包\x1b[0m"));
+    assert!(arguments.contains("\x1b[33m使用 paru\x1b[0m"));
     assert!(arguments.contains("! 卸载不可逆"));
     assert!(arguments.contains("alt-c:accept"));
     assert!(arguments.contains("正在刷新卸载列表"));

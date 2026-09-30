@@ -94,6 +94,10 @@ mod tests {
             text(Lang::En, "picker.using", &[("helper", "paru")]),
             "Using paru"
         );
+        assert_eq!(
+            text(Lang::Zh, "picker.using", &[("helper", "paru")]),
+            "使用 paru"
+        );
         assert!(text(Lang::Zh, "preview.failed", &[("error", "timeout")]).contains("timeout"));
     }
 }
