@@ -30,45 +30,17 @@ pub(crate) fn print_intro(lang: Lang) {
 }
 
 pub(crate) fn log_info(lang: Lang, text: &str) {
-    println!(
-        "\x1b[1;34m[{}]\x1b[0m {text}",
-        if matches!(lang, Lang::Zh) {
-            "消息"
-        } else {
-            "INFO"
-        }
-    );
+    println!("\x1b[1;34m[{}]\x1b[0m {text}", msg(lang, "label_info"));
 }
 
 pub(crate) fn log_success(lang: Lang, text: &str) {
-    println!(
-        "\x1b[1;32m[{}]\x1b[0m {text}",
-        if matches!(lang, Lang::Zh) {
-            "成功"
-        } else {
-            "OK"
-        }
-    );
+    println!("\x1b[1;32m[{}]\x1b[0m {text}", msg(lang, "label_success"));
 }
 
 pub(crate) fn log_warn(lang: Lang, text: &str) {
-    println!(
-        "\x1b[1;33m[{}]\x1b[0m {text}",
-        if matches!(lang, Lang::Zh) {
-            "注意"
-        } else {
-            "WARN"
-        }
-    );
+    println!("\x1b[1;33m[{}]\x1b[0m {text}", msg(lang, "label_warn"));
 }
 
 pub(crate) fn log_error(lang: Lang, text: &str) {
-    println!(
-        "\x1b[1;31m[{}]\x1b[0m {text}",
-        if matches!(lang, Lang::Zh) {
-            "错误"
-        } else {
-            "ERROR"
-        }
-    );
+    println!("\x1b[1;31m[{}]\x1b[0m {text}", msg(lang, "label_error"));
 }

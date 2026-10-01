@@ -1,4 +1,8 @@
 intro=== Arch Linux 系统更新助手 ===
+label_info=消息
+label_success=成功
+label_warn=注意
+label_error=错误
 desc=本脚本将执行以下操作：
 step_1=获取最新 Arch Linux 新闻
 step_2=检查镜像源时效并按需更新

@@ -1,4 +1,8 @@
 intro=== Arch Linux System Update Assistant ===
+label_info=INFO
+label_success=OK
+label_warn=WARN
+label_error=ERROR
 desc=Actions to perform:
 step_1=Fetch latest Arch Linux news
 step_2=Check mirrorlist age and update if needed
