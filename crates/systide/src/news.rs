@@ -244,6 +244,7 @@ mod tests {
         let rendered = render_news_item(&item, crate::messages::Lang::En, true);
         assert!(rendered.contains("Update title\n  2026-10-01 · https://example.test/news"));
         assert!(!rendered.contains("\x1b["));
+        assert!(!rendered.contains("\x1b]"));
     }
 
     #[test]
