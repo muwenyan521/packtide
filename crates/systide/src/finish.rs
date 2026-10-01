@@ -23,6 +23,7 @@ pub(crate) fn run(lang: Lang) -> Result<()> {
         log_warn(lang, msg(lang, "grub_skip"));
     }
     signal_waybar();
+    log_success(lang, msg(lang, "finish_complete"));
     Ok(())
 }
 

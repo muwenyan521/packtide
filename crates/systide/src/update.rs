@@ -38,6 +38,7 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
         log_error(lang, msg(lang, "partial_retry"));
         return result.map(|_| ());
     }
+    log_success(lang, msg(lang, "update_complete"));
     Ok(())
 }
 
