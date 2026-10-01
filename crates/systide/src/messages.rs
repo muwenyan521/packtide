@@ -21,6 +21,14 @@ pub(crate) fn msg(lang: Lang, key: &str) -> &'static str {
         })
 }
 
+pub(crate) fn msg_with(lang: Lang, key: &str, replacements: &[(&str, String)]) -> String {
+    let mut value = msg(lang, key).to_owned();
+    for (name, replacement) in replacements {
+        value = value.replace(&format!("{{{name}}}"), replacement);
+    }
+    value
+}
+
 pub(crate) fn print_intro(lang: Lang) {
     println!("\x1b[1;36m{}\x1b[0m", msg(lang, "intro"));
     println!("{}", msg(lang, "desc"));

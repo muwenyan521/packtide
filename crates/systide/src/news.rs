@@ -161,44 +161,46 @@ pub(crate) fn fetch_news(source: &str, count: usize, lang: Lang) -> Option<Vec<N
 }
 
 pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
-    use std::fmt::Write as _;
-
+    let plain = std::env::var_os("NO_COLOR").is_some();
     let title = msg(lang, "news_title").replace("{count}", &items.len().to_string());
-    println!("\n\x1b[1;33m{}\x1b[0m\n", title);
-    let mut rendered = String::new();
-    for item in items {
-        rendered.clear();
-        let color = if item.urgent { "1;31" } else { "1;32" };
-        let plain_links = std::env::var_os("NO_COLOR").is_some();
-        let date = if item.date.is_empty() {
-            msg(lang, "news_no_date").to_owned()
-        } else {
-            truncate_display(&item.date, 16)
-        };
-        if !plain_links {
-            write!(rendered, "\x1b[{color}m").expect("write news color");
-        }
-        if !item.link.is_empty() && !plain_links {
-            write!(rendered, "\x1b]8;;{}\x1b\\", item.link).expect("write news link");
-        }
-        write!(
-            rendered,
-            "[{date}] {}{}",
-            if item.urgent { "!!! " } else { "" },
-            item.title
-        )
-        .expect("write news line");
-        if !item.link.is_empty() && !plain_links {
-            rendered.push_str("\x1b]8;;\x1b\\");
-        } else if !item.link.is_empty() {
-            write!(rendered, " ({})", item.link).expect("write news fallback link");
-        }
-        if !plain_links {
-            rendered.push_str("\x1b[0m");
-        }
-        rendered.push('\n');
-        print!("{rendered}");
+    if plain {
+        println!("\n{}\n", title);
+    } else {
+        println!("\n\x1b[1;33m{}\x1b[0m\n", title);
     }
+    for item in items {
+        print!("{}", render_news_item(item, lang, plain));
+    }
+}
+
+fn render_news_item(item: &NewsItem, lang: Lang, plain: bool) -> String {
+    use std::fmt::Write as _;
+    let date = if item.date.is_empty() {
+        msg(lang, "news_no_date").to_owned()
+    } else {
+        truncate_display(&item.date, 16)
+    };
+    let title = format!("{}{}", if item.urgent { "!!! " } else { "" }, item.title);
+    let mut rendered = String::new();
+    if plain {
+        writeln!(rendered, "{}", title).expect("write plain news title");
+    } else {
+        let color = if item.urgent { "1;31" } else { "2" };
+        writeln!(rendered, "\x1b[{color}m{}\x1b[0m", title).expect("write news title");
+    }
+    if item.link.is_empty() {
+        writeln!(rendered, "  {date}").expect("write news date");
+    } else if plain {
+        writeln!(rendered, "  {date} · {}", item.link).expect("write plain news link");
+    } else {
+        writeln!(
+            rendered,
+            "\x1b[2m  {date} · \x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\\x1b[0m",
+            item.link, item.link
+        )
+        .expect("write OSC-8 news link");
+    }
+    rendered
 }
 
 fn truncate_display(value: &str, width: usize) -> String {
@@ -221,7 +223,7 @@ fn truncate_display(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_display;
+    use super::{NewsItem, render_news_item, truncate_display};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -229,5 +231,18 @@ mod tests {
         let value = truncate_display("2026 年 10 月 01 日 12:34", 16);
         assert!(UnicodeWidthStr::width(value.as_str()) <= 16);
         assert!(value.ends_with("..."));
+    }
+
+    #[test]
+    fn renders_ordinary_news_as_dimmed_title_with_plain_link_fallback() {
+        let item = NewsItem {
+            title: "Update title".to_owned(),
+            date: "2026-10-01".to_owned(),
+            link: "https://example.test/news".to_owned(),
+            urgent: false,
+        };
+        let rendered = render_news_item(&item, crate::messages::Lang::En, true);
+        assert!(rendered.contains("Update title\n  2026-10-01 · https://example.test/news"));
+        assert!(!rendered.contains("\x1b["));
     }
 }

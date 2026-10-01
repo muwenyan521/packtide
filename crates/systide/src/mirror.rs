@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::{command_exists, run_capture, run_privileged, run_status_no_args};
 
-use crate::messages::{Lang, log_info, msg};
+use crate::messages::{Lang, log_info, msg, msg_with};
 
 pub(crate) fn check_age(lang: Lang) -> Result<()> {
     if !is_arch() {
@@ -20,6 +20,7 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
         return Ok(());
     };
     let Ok(timestamp) = parse_date_timestamp(when.trim()) else {
+        println!("{}", msg(lang, "mirror_unknown"));
         return Ok(());
     };
     let now = SystemTime::now()
@@ -28,7 +29,10 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
         .unwrap_or_default();
     let age = now.saturating_sub(timestamp) / 86_400;
     if age > 30 {
-        println!("{} ({age} days)", msg(lang, "mirror_old"));
+        println!(
+            "{}",
+            msg_with(lang, "mirror_old", &[("days", age.to_string())])
+        );
         print!("{}", msg(lang, "mirror_confirm"));
         io::stdout().flush()?;
         let mut answer = String::new();
@@ -53,9 +57,14 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
             } else {
                 println!("{}", msg(lang, "mirror_skip"));
             }
+        } else {
+            println!("{}", msg(lang, "mirror_cancelled"));
         }
     } else {
-        println!("{} ({age} days)", msg(lang, "mirror_fresh"));
+        println!(
+            "{}",
+            msg_with(lang, "mirror_fresh", &[("days", age.to_string())])
+        );
     }
     Ok(())
 }
