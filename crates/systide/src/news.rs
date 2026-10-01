@@ -168,19 +168,29 @@ pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
     } else {
         println!("\n\x1b[1;33m{}\x1b[0m\n", title);
     }
+    let width = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|width: &usize| *width > 0)
+        .unwrap_or(80);
     for item in items {
-        print!("{}", render_news_item(item, lang, plain));
+        print!("{}", render_news_item_with_width(item, lang, plain, width));
     }
 }
 
-fn render_news_item(item: &NewsItem, lang: Lang, plain: bool) -> String {
+fn render_news_item_with_width(item: &NewsItem, lang: Lang, plain: bool, width: usize) -> String {
     use std::fmt::Write as _;
     let date = if item.date.is_empty() {
         msg(lang, "news_no_date").to_owned()
     } else {
         truncate_display(&item.date, 16)
     };
-    let title = format!("{}{}", if item.urgent { "!!! " } else { "" }, item.title);
+    let title = truncate_display(
+        &format!("{}{}", if item.urgent { "!!! " } else { "" }, item.title),
+        width.saturating_sub(2),
+    );
+    let link_width = width.saturating_sub(2 + UnicodeWidthStr::width(date.as_str()) + 3);
+    let link = truncate_display(&item.link, link_width);
     let mut rendered = String::new();
     if plain {
         writeln!(rendered, "{}", title).expect("write plain news title");
@@ -191,12 +201,12 @@ fn render_news_item(item: &NewsItem, lang: Lang, plain: bool) -> String {
     if item.link.is_empty() {
         writeln!(rendered, "  {date}").expect("write news date");
     } else if plain {
-        writeln!(rendered, "  {date} · {}", item.link).expect("write plain news link");
+        writeln!(rendered, "  {date} · {link}").expect("write plain news link");
     } else {
         writeln!(
             rendered,
             "\x1b[2m  {date} · \x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\\x1b[0m",
-            item.link, item.link
+            item.link, link
         )
         .expect("write OSC-8 news link");
     }
@@ -223,7 +233,7 @@ fn truncate_display(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NewsItem, render_news_item, truncate_display};
+    use super::{NewsItem, render_news_item_with_width, truncate_display};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -241,7 +251,7 @@ mod tests {
             link: "https://example.test/news".to_owned(),
             urgent: false,
         };
-        let rendered = render_news_item(&item, crate::messages::Lang::En, true);
+        let rendered = render_news_item_with_width(&item, crate::messages::Lang::En, true, 80);
         assert!(rendered.contains("Update title\n  2026-10-01 · https://example.test/news"));
         assert!(!rendered.contains("\x1b["));
         assert!(!rendered.contains("\x1b]"));
@@ -255,8 +265,24 @@ mod tests {
             link: "https://example.test/news".to_owned(),
             urgent: false,
         };
-        let rendered = render_news_item(&item, crate::messages::Lang::En, false);
+        let rendered = render_news_item_with_width(&item, crate::messages::Lang::En, false, 80);
         assert!(rendered.contains("\x1b[2mUpdate title\x1b[0m"));
         assert!(rendered.contains("\x1b]8;;https://example.test/news\x1b\\"));
+    }
+
+    #[test]
+    fn narrow_news_item_stays_within_terminal_width() {
+        let item = NewsItem {
+            title: "A very long title for a narrow terminal".to_owned(),
+            date: "2026-10-01".to_owned(),
+            link: "https://example.test/a-very-long-news-link".to_owned(),
+            urgent: true,
+        };
+        let rendered = render_news_item_with_width(&item, crate::messages::Lang::En, true, 24);
+        assert!(
+            rendered
+                .lines()
+                .all(|line| UnicodeWidthStr::width(line) <= 24)
+        );
     }
 }
