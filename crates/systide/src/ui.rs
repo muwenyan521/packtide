@@ -121,7 +121,8 @@ fn append_source_rows(
 
 pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
     let picker_started = Instant::now();
-    require_command_for("fzf", "the system update list picker", false)?;
+    require_command_for("fzf", "the system update list picker", false)
+        .map_err(|_| anyhow::anyhow!("{}", msg(lang, "missing_fzf")))?;
     let rows = collect_update_rows()?;
     if rows.is_empty() {
         println!("{}", msg(lang, "list.empty"));

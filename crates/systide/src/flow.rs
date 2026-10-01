@@ -12,7 +12,14 @@ pub(crate) fn language(value: &str) -> Result<Lang> {
             env::var("LC_MESSAGES").ok().as_deref(),
             env::var("LANG").ok().as_deref(),
         ))),
-        _ => bail!("--ui-lang must be auto, zh, or en"),
+        _ => {
+            let lang = if value.starts_with("zh") {
+                Lang::Zh
+            } else {
+                Lang::En
+            };
+            bail!("{}", msg(lang, "invalid_ui_lang"));
+        }
     }
 }
 

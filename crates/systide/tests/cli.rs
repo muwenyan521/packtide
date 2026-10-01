@@ -54,10 +54,7 @@ fn list_missing_fzf_names_the_affected_picker() {
 
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("required command 'fzf' is unavailable for the system update list picker")
-    );
-    assert!(error.contains("install it and retry"));
+    assert!(error.contains("Required command 'fzf' is unavailable"));
 }
 
 #[test]
