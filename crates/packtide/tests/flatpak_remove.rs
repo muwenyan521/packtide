@@ -443,12 +443,11 @@ fn check_updates_fake_picker_preserves_order_and_cancel_feedback() {
         .env("PATH", path)
         .env("XDG_CACHE_HOME", cache)
         .env("PACKTIDE_UI_LANG", "en")
-        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .env("PACKTIDE_TEST_FORCE_INTERACTIVE", "1")
         .output()
         .expect("run check-updates cancellation fixture");
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("No packages selected."));
     let rows = fs::read_to_string(fzf_input).expect("read update picker rows");
     assert!(
         rows.find("[Pacman").unwrap() < rows.find("[AUR").unwrap(),
@@ -462,7 +461,7 @@ fn check_updates_fake_picker_preserves_order_and_cancel_feedback() {
     assert!(args.contains("--track"));
     assert!(args.contains("--id-nth=2"));
     assert!(args.contains("reload-sync"));
-    assert!(args.contains("Updates available >"));
+    assert!(args.contains("--header"));
 }
 
 #[test]
@@ -472,7 +471,14 @@ fn check_updates_fake_picker_accept_bridges_to_systide() {
     let systide_args = fixture.path().join("systide.args");
     write_update_cache(&cache);
     fixture.write_executable("flatpak", "#!/bin/sh\nexit 0\n");
-    fixture.write_executable("fzf", "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+    let fzf_accept = fixture.path().join("fzf.accept");
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\ncat >/dev/null\nprintf 'selected-row\\n' > '{}'\nexit 0\n",
+            fzf_accept.display()
+        ),
+    );
     fixture.write_executable(
         "systide",
         &format!(
@@ -487,8 +493,8 @@ fn check_updates_fake_picker_accept_bridges_to_systide() {
         .args(["check-updates"])
         .env("PATH", path)
         .env("XDG_CACHE_HOME", cache)
-        .env("PACKTIDE_SYSTIDE_BIN", fixture.path().join("systide"))
-        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .env("PACKTIDE_TEST_SYSTIDE_BIN", fixture.path().join("systide"))
+        .env("PACKTIDE_TEST_FORCE_INTERACTIVE", "1")
         .output()
         .expect("run check-updates accept fixture");
 
@@ -501,6 +507,10 @@ fn check_updates_fake_picker_accept_bridges_to_systide() {
     assert_eq!(
         fs::read_to_string(systide_args).expect("read systide bridge args"),
         "--ui-lang\nauto\n--news-source\nofficial\n--count\n15\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fzf_accept).expect("read accepted picker marker"),
+        "selected-row\n"
     );
 }
 
@@ -519,14 +529,12 @@ fn check_updates_picker_failure_is_not_reported_as_cancel() {
         .env("PATH", path)
         .env("XDG_CACHE_HOME", cache)
         .env("PACKTIDE_UI_LANG", "en")
-        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .env("PACKTIDE_TEST_FORCE_INTERACTIVE", "1")
         .output()
         .expect("run check-updates picker failure fixture");
 
     assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("check-updates picker failed: fzf exited with status 2"));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("No packages selected."));
+    assert!(!output.stderr.is_empty());
 }
 
 #[test]

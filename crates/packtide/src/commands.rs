@@ -23,11 +23,10 @@ pub(crate) fn sysup(list: bool, ui_lang: &str, news_source: &str, count: usize) 
 }
 
 fn systide_executable() -> Result<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("PACKTIDE_SYSTIDE_BIN") {
-        let path = std::path::PathBuf::from(path);
-        if path.is_file() {
-            return Ok(path);
-        }
+    if let Some(path) = test_systide_override()
+        && path.is_file()
+    {
+        return Ok(path);
     }
     let current = current_executable()?;
     if let Some(sibling) = current.parent().map(|parent| parent.join("systide"))
@@ -40,4 +39,15 @@ fn systide_executable() -> Result<std::path::PathBuf> {
         .ok_or_else(|| {
             anyhow::anyhow!("required command 'systide' is unavailable for system update")
         })
+}
+
+fn test_systide_override() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os("PACKTIDE_TEST_SYSTIDE_BIN").map(std::path::PathBuf::from)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
 }

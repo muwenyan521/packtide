@@ -26,7 +26,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
     let fresh_repo_aur = cache.read_repo_aur_fresh();
     let fresh = fresh_repo_aur.is_some();
     let interactive_terminal = io::stdout().is_terminal() && io::stdin().is_terminal();
-    let force_interactive = env::var_os("PACKTIDE_FORCE_INTERACTIVE").is_some();
+    let force_interactive = test_force_interactive();
     let fzf = if !list_only && (interactive_terminal || force_interactive) {
         ExecutableResolver::from_path(env::var_os("PATH").as_deref())
             .resolve(std::ffi::OsStr::new("fzf"))
@@ -129,6 +129,17 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn test_force_interactive() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        env::var_os("PACKTIDE_TEST_FORCE_INTERACTIVE").is_some()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
 }
 
 fn deduplicate_updates(updates: Vec<PackageUpdate>) -> Vec<PackageUpdate> {
