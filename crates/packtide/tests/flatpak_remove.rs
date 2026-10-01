@@ -531,6 +531,17 @@ fn preview_argument_errors_follow_selected_locale() {
     assert!(!english.status.success());
     assert!(String::from_utf8_lossy(&english.stderr).contains("Preview requires a package name."));
 
+    let invalid = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["__preview", "install", "core\t../escape\t5.3-1"])
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run preview with an invalid package row");
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("Preview received an invalid package row.")
+    );
+
     let chinese = Command::new(env!("CARGO_BIN_EXE_packtide"))
         .args(["__preview", "unknown", "core\tbash\t5.3-1"])
         .env("PACKTIDE_UI_LANG", "zh")
