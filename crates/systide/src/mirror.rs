@@ -28,14 +28,7 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
     let age = now.saturating_sub(timestamp) / 86_400;
     if age > 30 {
         println!("{} ({age} days)", msg(lang, "mirror_old"));
-        print!(
-            "{}",
-            if matches!(lang, Lang::Zh) {
-                "是否运行 reflector 更新镜像？[Y/n] "
-            } else {
-                "Run reflector to update mirrors? [Y/n] "
-            }
-        );
+        print!("{}", msg(lang, "mirror_confirm"));
         io::stdout().flush()?;
         let mut answer = String::new();
         io::stdin().lock().read_line(&mut answer)?;

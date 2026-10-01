@@ -3,7 +3,7 @@ use system_tools_core::{
     PackageUpgradePrivilege, package_upgrade_command, run_package_upgrade, run_privileged,
 };
 
-use crate::messages::{Lang, log_info, log_success, log_warn, msg};
+use crate::messages::{Lang, log_error, log_info, log_success, log_warn, msg};
 
 pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
     if matches!(manager, "pacman" | "paru" | "yay") {
@@ -32,7 +32,7 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
     print_summary("upgrade", command.program, privilege, command.args);
     let result = run_package_upgrade(manager);
     if result.is_err() {
-        println!("{}", msg(lang, "partial"));
+        log_error(lang, msg(lang, "partial"));
         return result.map(|_| ());
     }
     Ok(())

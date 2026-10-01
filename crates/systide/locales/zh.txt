@@ -1,11 +1,20 @@
 intro=== Arch Linux 系统更新助手 ===
 desc=本脚本将执行以下操作：
+step_1=获取最新 Arch Linux 新闻
+step_2=检查镜像源时效并按需更新
+step_3=同步软件数据库并更新 GPG 密钥环
+step_4=升级系统软件包（交互模式防冲突）
+step_5=更新 Flatpak 应用
+step_6=重新生成 GRUB 配置文件
 cancel=更新已取消。
 confirm=请阅读上述新闻。确认使用 %s 开始更新吗？[Y/n]
 partial=系统数据库已同步但升级失败，禁止执行部分升级；请解决冲突后重新运行。
 mirror_old=镜像列表已超过 30 天未更新。
 mirror_fresh=镜像列表仍然新鲜。
+mirror_confirm=是否运行 reflector 更新镜像？[Y/n]
 news_fail=获取新闻失败（网络或源错误）
+news_title=最近的系统新闻（{count} 条）
+news_no_date=无日期
 force_confirm=新闻获取失败，是否强制更新？[y/N]
 mirror_skip=未找到镜像更新程序，跳过。
 snap=[0/6] 正在创建 Btrfs 快照...

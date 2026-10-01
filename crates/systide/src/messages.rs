@@ -24,20 +24,8 @@ pub(crate) fn msg(lang: Lang, key: &str) -> &'static str {
 pub(crate) fn print_intro(lang: Lang) {
     println!("\x1b[1;36m{}\x1b[0m", msg(lang, "intro"));
     println!("{}", msg(lang, "desc"));
-    if matches!(lang, Lang::Zh) {
-        println!("  1. 获取最新 Arch Linux 新闻");
-        println!("  2. 检查镜像源时效并按需更新");
-        println!("  3. 同步软件数据库并更新 GPG 密钥环");
-        println!("  4. 升级系统软件包 (交互模式防冲突)");
-        println!("  5. 更新 Flatpak 应用");
-        println!("  6. 重新生成 GRUB 配置文件");
-    } else {
-        println!("  1. Fetch latest Arch Linux news");
-        println!("  2. Check mirrorlist age & Update if needed");
-        println!("  3. Sync Pacman DB & Update GPG Keyrings");
-        println!("  4. Upgrade system packages (Interactive)");
-        println!("  5. Update Flatpak apps");
-        println!("  6. Re-generate GRUB config");
+    for index in 1..=6 {
+        println!("  {index}. {}", msg(lang, &format!("step_{index}")));
     }
 }
 
@@ -70,6 +58,17 @@ pub(crate) fn log_warn(lang: Lang, text: &str) {
             "注意"
         } else {
             "WARN"
+        }
+    );
+}
+
+pub(crate) fn log_error(lang: Lang, text: &str) {
+    println!(
+        "\x1b[1;31m[{}]\x1b[0m {text}",
+        if matches!(lang, Lang::Zh) {
+            "错误"
+        } else {
+            "ERROR"
         }
     );
 }

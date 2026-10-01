@@ -1,11 +1,20 @@
 intro=== Arch Linux System Update Assistant ===
 desc=Actions to perform:
+step_1=Fetch latest Arch Linux news
+step_2=Check mirrorlist age and update if needed
+step_3=Sync Pacman DB and update GPG keyrings
+step_4=Upgrade system packages (interactive)
+step_5=Update Flatpak apps
+step_6=Regenerate GRUB config
 cancel=Update cancelled.
 confirm=Proceed with %s? [Y/n]
 partial=Databases were synchronized but the upgrade failed; do not perform a partial upgrade. Resolve the conflict and retry.
 mirror_old=The mirror list is older than 30 days.
 mirror_fresh=The mirror list is fresh.
+mirror_confirm=Run reflector to update mirrors? [Y/n]
 news_fail=Failed to fetch news
+news_title=Recent system news ({count})
+news_no_date=No date
 force_confirm=News fetch failed. Force update? [y/N]
 mirror_skip=Mirror updater not found; skipping.
 snap=[0/6] Creating Btrfs Snapshot...

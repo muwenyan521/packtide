@@ -2,6 +2,7 @@ use crate::messages::{Lang, msg};
 use quick_xml::Reader;
 use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::{BytesRef, Event};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug)]
 pub(crate) struct NewsItem {
@@ -162,26 +163,16 @@ pub(crate) fn fetch_news(source: &str, count: usize, lang: Lang) -> Option<Vec<N
 pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
     use std::fmt::Write as _;
 
-    println!(
-        "\n\x1b[1;33m{}\x1b[0m\n",
-        if matches!(lang, Lang::Zh) {
-            "最近的系统新闻："
-        } else {
-            "Recent system news:"
-        }
-    );
+    let title = msg(lang, "news_title").replace("{count}", &items.len().to_string());
+    println!("\n\x1b[1;33m{}\x1b[0m\n", title);
     let mut rendered = String::new();
     for item in items {
         rendered.clear();
         let color = if item.urgent { "1;31" } else { "1;32" };
         let date = if item.date.is_empty() {
-            "No date"
+            msg(lang, "news_no_date").to_owned()
         } else {
-            &item.date[..item
-                .date
-                .char_indices()
-                .nth(16)
-                .map_or(item.date.len(), |(i, _)| i)]
+            truncate_display(&item.date, 16)
         };
         write!(rendered, "\x1b[{color}m").expect("write news color");
         if !item.link.is_empty() {
@@ -199,5 +190,36 @@ pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
         }
         rendered.push_str("\x1b[0m\n");
         print!("{rendered}");
+    }
+}
+
+fn truncate_display(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
+        return value.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in value.chars() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + char_width > width.saturating_sub(3) {
+            break;
+        }
+        out.push(ch);
+        used += char_width;
+    }
+    out.push_str("...");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_display;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn truncates_cjk_dates_by_display_width() {
+        let value = truncate_display("2026 年 10 月 01 日 12:34", 16);
+        assert!(UnicodeWidthStr::width(value.as_str()) <= 16);
+        assert!(value.ends_with("..."));
     }
 }
