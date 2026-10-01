@@ -393,6 +393,7 @@ dependencies = [
  "clap",
  "quick-xml",
  "system-tools-core",
+ "unicode-width",
  "ureq",
 ]
 
