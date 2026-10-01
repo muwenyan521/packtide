@@ -162,14 +162,17 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .spawn()
-        .context("cannot start update list")?;
+        .with_context(|| msg(lang, "list.start_failed"))?;
     if let Some(mut input) = child.stdin.take() {
         input.write_all(rows.as_bytes())?;
     }
     let status = child.wait()?;
-    classify_fzf_status(status)
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("system update list picker failed: {error}"))
+    classify_fzf_status(status).map(Some).map_err(|error| {
+        anyhow::anyhow!(
+            "{}",
+            msg(lang, "list.failed").replace("{error}", &error.to_string())
+        )
+    })
 }
 
 #[cfg(test)]

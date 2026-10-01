@@ -39,3 +39,5 @@ list.prompt=待更新项目 >
 list.refresh=正在拉取最新数据... >
 list.header=Esc:退出 | Enter:更新系统 | Ctrl+R:强制刷新
 list.empty=没有可用更新。
+list.start_failed=无法启动系统更新列表选择器
+list.failed=系统更新列表选择器失败：{error}

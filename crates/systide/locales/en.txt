@@ -39,3 +39,5 @@ list.prompt=Updates available >
 list.refresh=Fetching latest updates... >
 list.header=Esc:exit | Enter:update system | Ctrl+R:refresh
 list.empty=No updates found.
+list.start_failed=Cannot start update list picker
+list.failed=System update list picker failed: {error}
