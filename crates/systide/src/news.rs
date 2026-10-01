@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn narrow_news_item_stays_within_terminal_width() {
+    fn narrow_news_item_preserves_full_plain_url_even_when_wide() {
         let item = NewsItem {
             title: "A very long title for a narrow terminal".to_owned(),
             date: "2026-10-01".to_owned(),
