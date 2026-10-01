@@ -877,6 +877,55 @@ fn downgrade_cancel_does_not_start_the_transaction() {
 }
 
 #[test]
+fn downgrade_accept_preserves_preview_and_transaction_argv() {
+    let fixture = Fixture::new();
+    let fzf_args = fixture.path().join("downgrade.fzf.args");
+    let transaction = fixture.path().join("downgrade.transaction");
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$2\" in\n  -Sl) printf 'core bash 5.3-1\\n' ;;\n  -Q) printf 'bash 5.4-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable("paru", "#!/bin/sh\ncase \"$1:$2\" in --color=always:-Qi) printf 'Name : bash\\nVersion : 5.4-1\\n' ;; *) exit 0 ;; esac\n");
+    fixture.write_executable(
+        "downgrade",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 0\n",
+            transaction.display()
+        ),
+    );
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat >/dev/null\nprintf 'core bash 5.4-1\\n'\nexit 0\n",
+            fzf_args.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["downgrade"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .env(
+            "PACKTIDE_TEST_DOWNGRADE_BIN",
+            fixture.path().join("downgrade"),
+        )
+        .output()
+        .expect("run downgrade accept fixture");
+
+    assert!(output.status.success());
+    let args = fs::read_to_string(fzf_args).expect("read downgrade fzf args");
+    assert!(args.contains("--preview"));
+    assert!(args.contains("__preview downgrade"));
+    assert!(args.contains("--no-wrap"));
+    assert!(args.contains("--ellipsis=..."));
+    assert_eq!(
+        fs::read_to_string(transaction).expect("read downgrade transaction"),
+        "downgrade\nbash\n"
+    );
+}
+
+#[test]
 fn downgrade_picker_uses_localized_header_and_source_colors() {
     let fixture = Fixture::new();
     let fzf_args = fixture.path().join("fzf.args");

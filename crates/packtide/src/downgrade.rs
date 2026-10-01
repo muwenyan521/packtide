@@ -100,7 +100,20 @@ pub fn run(query: &[String]) -> Result<()> {
     let command = transaction_args(&packages);
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary("downgrade", "downgrade", "sudo", &targets);
-    run_privileged(&command)?;
+    run_downgrade_transaction(&command)?;
+    Ok(())
+}
+
+fn run_downgrade_transaction(command: &[String]) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Some(program) = std::env::var_os("PACKTIDE_TEST_DOWNGRADE_BIN") {
+        let status = Command::new(program).args(command).status()?;
+        if !status.success() {
+            bail!("downgrade test transaction exited with {status}");
+        }
+        return Ok(());
+    }
+    run_privileged(command)?;
     Ok(())
 }
 
