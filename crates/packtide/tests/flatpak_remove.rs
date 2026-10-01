@@ -522,6 +522,25 @@ fn install_preview_covers_success_empty_and_failure_states() {
 }
 
 #[test]
+fn preview_argument_errors_follow_selected_locale() {
+    let english = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["__preview", "install"])
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run preview without a package row");
+    assert!(!english.status.success());
+    assert!(String::from_utf8_lossy(&english.stderr).contains("Preview requires a package name."));
+
+    let chinese = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["__preview", "unknown", "core\tbash\t5.3-1"])
+        .env("PACKTIDE_UI_LANG", "zh")
+        .output()
+        .expect("run preview with unknown kind");
+    assert!(!chinese.status.success());
+    assert!(String::from_utf8_lossy(&chinese.stderr).contains("未知的预览类型：unknown"));
+}
+
+#[test]
 fn install_preview_preserves_colored_helper_sections_and_strips_osc_labels() {
     let fixture = Fixture::new();
     fixture.write_executable(
