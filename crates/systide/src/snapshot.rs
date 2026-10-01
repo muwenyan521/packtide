@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use system_tools_core::{ExecutableResolver, run_capture_path, run_status_path};
 
-use crate::messages::{Lang, log_info, msg};
+use crate::messages::{Lang, log_info, msg, msg_with};
 
 pub(crate) fn create(lang: Lang) {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
@@ -17,7 +17,10 @@ pub(crate) fn create(lang: Lang) {
     if filesystem.as_deref() == Some("btrfs") {
         log_info(lang, msg(lang, "snap"));
         if let Err(error) = run_status_path(&quicksave, &["-d", "quicksave-sysup"]) {
-            eprintln!("snapshot skipped: {error}");
+            eprintln!(
+                "{}",
+                msg_with(lang, "snapshot_failed", &[("error", error.to_string())])
+            );
         }
     } else {
         println!("{}", msg(lang, "snapshot_skip"));

@@ -995,14 +995,14 @@ fn mirror_update_missing_reflector_names_the_affected_operation() {
 fn sysup_compatibility_bridge_reports_systide_dependency() {
     let fixture = Fixture::new();
     let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
-        .args(["sysup"])
+        .args(["sysup", "--ui-lang", "en"])
         .env("PATH", fixture.path())
         .output()
         .expect("run packtide sysup with no package helpers");
     let error = String::from_utf8_lossy(&output.stderr);
 
     assert!(!output.status.success());
-    assert!(error.contains("no AUR helper found") || error.contains("required command 'systide'"));
+    assert!(error.contains("No AUR helper found") || error.contains("required command 'systide'"));
 }
 
 fn assert_missing_required_command(subcommand: &str, command: &str, capability: &str) {

@@ -245,4 +245,17 @@ mod tests {
         assert!(rendered.contains("Update title\n  2026-10-01 · https://example.test/news"));
         assert!(!rendered.contains("\x1b["));
     }
+
+    #[test]
+    fn renders_dimmed_ordinary_news_and_osc8_link() {
+        let item = NewsItem {
+            title: "Update title".to_owned(),
+            date: "2026-10-01".to_owned(),
+            link: "https://example.test/news".to_owned(),
+            urgent: false,
+        };
+        let rendered = render_news_item(&item, crate::messages::Lang::En, false);
+        assert!(rendered.contains("\x1b[2mUpdate title\x1b[0m"));
+        assert!(rendered.contains("\x1b]8;;https://example.test/news\x1b\\"));
+    }
 }
