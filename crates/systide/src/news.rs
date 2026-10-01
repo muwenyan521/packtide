@@ -169,13 +169,16 @@ pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
     for item in items {
         rendered.clear();
         let color = if item.urgent { "1;31" } else { "1;32" };
+        let plain_links = std::env::var_os("NO_COLOR").is_some();
         let date = if item.date.is_empty() {
             msg(lang, "news_no_date").to_owned()
         } else {
             truncate_display(&item.date, 16)
         };
-        write!(rendered, "\x1b[{color}m").expect("write news color");
-        if !item.link.is_empty() {
+        if !plain_links {
+            write!(rendered, "\x1b[{color}m").expect("write news color");
+        }
+        if !item.link.is_empty() && !plain_links {
             write!(rendered, "\x1b]8;;{}\x1b\\", item.link).expect("write news link");
         }
         write!(
@@ -185,10 +188,15 @@ pub(crate) fn print_news(lang: Lang, items: &[NewsItem]) {
             item.title
         )
         .expect("write news line");
-        if !item.link.is_empty() {
+        if !item.link.is_empty() && !plain_links {
             rendered.push_str("\x1b]8;;\x1b\\");
+        } else if !item.link.is_empty() {
+            write!(rendered, " ({})", item.link).expect("write news fallback link");
         }
-        rendered.push_str("\x1b[0m\n");
+        if !plain_links {
+            rendered.push_str("\x1b[0m");
+        }
+        rendered.push('\n');
         print!("{rendered}");
     }
 }
