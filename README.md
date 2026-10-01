@@ -18,6 +18,22 @@
 - AUR AI 审查和 AI 残留清理按已确认范围暂不迁移。
 - 旧入口的 `--no-ai` 仍被接受并作为兼容 no-op，不会启用或调用任何 AI 功能。
 
+## 语言与资源
+
+当前 UI 资源集中在两个 binary 各自的 `locales/` 目录：
+
+- `crates/packtide/locales/en.txt`
+- `crates/packtide/locales/zh.txt`
+- `crates/systide/locales/en.txt`
+- `crates/systide/locales/zh.txt`
+
+`systide` 使用 `--ui-lang auto|zh|en`；`auto` 按 `LC_ALL`、`LC_MESSAGES`、`LANG`
+选择中文或英文。`packtide` 使用 `PACKTIDE_UI_LANG=auto|zh|en`，`auto` 同样读取
+locale 环境变量。新增语言只需增加对应资源文件并接入 loader，不改事务参数、包名
+解析或退出码。
+
+资源文件是构建时嵌入的本地文本，不需要网络，也不会把用户可见文案混进命令 argv。
+
 ## 当前状态
 
 当前是 Rust workspace，包含两个 release binary：`packtide` 和 `systide`。
