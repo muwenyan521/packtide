@@ -201,7 +201,7 @@ fn render_news_item_with_width(item: &NewsItem, lang: Lang, plain: bool, width: 
     if item.link.is_empty() {
         writeln!(rendered, "  {date}").expect("write news date");
     } else if plain {
-        writeln!(rendered, "  {date} · {link}").expect("write plain news link");
+        writeln!(rendered, "  {date} · {}", item.link).expect("write plain news link");
     } else {
         writeln!(
             rendered,
@@ -282,7 +282,8 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .all(|line| UnicodeWidthStr::width(line) <= 24)
+                .any(|line| UnicodeWidthStr::width(line) > 24)
         );
+        assert!(rendered.contains("https://example.test/a-very-long-news-link"));
     }
 }
