@@ -6,9 +6,11 @@ use crate::messages::{Lang, log_info, msg, msg_with};
 pub(crate) fn create(lang: Lang) {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
     let Some(quicksave) = resolver.resolve(OsStr::new("quicksave")) else {
+        println!("{}", msg(lang, "snapshot_tool_skip"));
         return;
     };
     let Some(findmnt) = resolver.resolve(OsStr::new("findmnt")) else {
+        println!("{}", msg(lang, "snapshot_tool_skip"));
         return;
     };
     let filesystem = run_capture_path(&findmnt, &["-no", "FSTYPE", "/"], true)

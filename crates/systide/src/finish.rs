@@ -9,6 +9,8 @@ pub(crate) fn run(lang: Lang) -> Result<()> {
     if let Some(flatpak) = resolver.resolve(OsStr::new("flatpak")) {
         log_info(lang, msg(lang, "flatpak_step"));
         run_status_path(&flatpak, &["update", "-y"])?;
+    } else {
+        log_warn(lang, msg(lang, "flatpak_skip"));
     }
     if resolver.resolve(OsStr::new("grub-mkconfig")).is_some() {
         log_info(lang, msg(lang, "grub_step"));
@@ -17,6 +19,8 @@ pub(crate) fn run(lang: Lang) -> Result<()> {
         } else {
             log_warn(lang, msg(lang, "grub_fail"));
         }
+    } else {
+        log_warn(lang, msg(lang, "grub_skip"));
     }
     signal_waybar();
     Ok(())
