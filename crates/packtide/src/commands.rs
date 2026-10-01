@@ -23,6 +23,12 @@ pub(crate) fn sysup(list: bool, ui_lang: &str, news_source: &str, count: usize) 
 }
 
 fn systide_executable() -> Result<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("PACKTIDE_SYSTIDE_BIN") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
     let current = current_executable()?;
     if let Some(sibling) = current.parent().map(|parent| parent.join("systide"))
         && sibling.is_file()

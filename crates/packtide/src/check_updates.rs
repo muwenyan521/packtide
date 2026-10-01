@@ -25,7 +25,9 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
     let cache = UpdateCache::new()?;
     let fresh_repo_aur = cache.read_repo_aur_fresh();
     let fresh = fresh_repo_aur.is_some();
-    let fzf = if !list_only && io::stdout().is_terminal() && io::stdin().is_terminal() {
+    let interactive_terminal = io::stdout().is_terminal() && io::stdin().is_terminal();
+    let force_interactive = env::var_os("PACKTIDE_FORCE_INTERACTIVE").is_some();
+    let fzf = if !list_only && (interactive_terminal || force_interactive) {
         ExecutableResolver::from_path(env::var_os("PATH").as_deref())
             .resolve(std::ffi::OsStr::new("fzf"))
     } else {

@@ -409,6 +409,126 @@ fn install_picker_starts_before_package_sources_finish() {
     assert!(!args.contains("start:reload"));
 }
 
+fn write_update_cache(cache: &Path) {
+    let path = cache.join("packtide/check-updates");
+    fs::create_dir_all(&path).expect("create update cache");
+    fs::write(
+        path.join("updates.txt"),
+        "pacman\tbash 5.3-1 -> 5.4-1\naur\taur-tool 1.0 -> 1.1",
+    )
+    .expect("write update cache");
+}
+
+#[test]
+fn check_updates_fake_picker_preserves_order_and_cancel_feedback() {
+    let fixture = Fixture::new();
+    let cache = fixture.path().join("cache");
+    let fzf_input = fixture.path().join("check-updates.input");
+    let fzf_args = fixture.path().join("check-updates.args");
+    write_update_cache(&cache);
+    fixture.write_executable("flatpak", "#!/bin/sh\nprintf 'org.example.App 2.0\\n'\n");
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat > '{}'\nexit 1\n",
+            fzf_args.display(),
+            fzf_input.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["check-updates"])
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_UI_LANG", "en")
+        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .output()
+        .expect("run check-updates cancellation fixture");
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No packages selected."));
+    let rows = fs::read_to_string(fzf_input).expect("read update picker rows");
+    assert!(
+        rows.find("[Pacman").unwrap() < rows.find("[AUR").unwrap(),
+        "rows={rows:?}"
+    );
+    assert!(
+        rows.find("[AUR").unwrap() < rows.find("[Flatpak").unwrap(),
+        "rows={rows:?}"
+    );
+    let args = fs::read_to_string(fzf_args).expect("read update picker args");
+    assert!(args.contains("--track"));
+    assert!(args.contains("--id-nth=2"));
+    assert!(args.contains("reload-sync"));
+    assert!(args.contains("Updates available >"));
+}
+
+#[test]
+fn check_updates_fake_picker_accept_bridges_to_systide() {
+    let fixture = Fixture::new();
+    let cache = fixture.path().join("cache");
+    let systide_args = fixture.path().join("systide.args");
+    write_update_cache(&cache);
+    fixture.write_executable("flatpak", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable("fzf", "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+    fixture.write_executable(
+        "systide",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 0\n",
+            systide_args.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["check-updates"])
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_SYSTIDE_BIN", fixture.path().join("systide"))
+        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .output()
+        .expect("run check-updates accept fixture");
+
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        fs::read_to_string(systide_args).expect("read systide bridge args"),
+        "--ui-lang\nauto\n--news-source\nofficial\n--count\n15\n"
+    );
+}
+
+#[test]
+fn check_updates_picker_failure_is_not_reported_as_cancel() {
+    let fixture = Fixture::new();
+    let cache = fixture.path().join("cache");
+    write_update_cache(&cache);
+    fixture.write_executable("flatpak", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable("fzf", "#!/bin/sh\ncat >/dev/null\nexit 2\n");
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["check-updates"])
+        .env("PATH", path)
+        .env("XDG_CACHE_HOME", cache)
+        .env("PACKTIDE_UI_LANG", "en")
+        .env("PACKTIDE_FORCE_INTERACTIVE", "1")
+        .output()
+        .expect("run check-updates picker failure fixture");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("check-updates picker failed: fzf exited with status 2"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("No packages selected."));
+}
+
 #[test]
 fn install_catalog_failure_is_not_reported_as_no_selection() {
     let fixture = Fixture::new();
