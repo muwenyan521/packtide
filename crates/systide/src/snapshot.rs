@@ -19,7 +19,7 @@ pub(crate) fn create(lang: Lang) {
         if let Err(error) = run_status_path(&quicksave, &["-d", "quicksave-sysup"]) {
             eprintln!("snapshot skipped: {error}");
         }
-    } else if matches!(lang, Lang::Zh) {
-        println!("根文件系统不是 Btrfs，跳过快照。");
+    } else {
+        println!("{}", msg(lang, "snapshot_skip"));
     }
 }

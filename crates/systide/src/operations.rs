@@ -12,10 +12,10 @@ pub(crate) fn perform_update(manager: &str, lang: Lang) -> Result<()> {
     crate::finish::run(lang)
 }
 
-pub(crate) fn detect_manager() -> Result<&'static str> {
+pub(crate) fn detect_manager(lang: Lang) -> Result<&'static str> {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
     ["paru", "yay"]
         .into_iter()
         .find(|v| resolver.resolve(OsStr::new(v)).is_some())
-        .ok_or_else(|| anyhow::anyhow!("no AUR helper found (paru or yay)"))
+        .ok_or_else(|| anyhow::anyhow!("{}", msg(lang, "aur_missing")))
 }

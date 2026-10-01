@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     print_intro(lang);
     messages::log_info(lang, msg(lang, "permission"));
     require_privileged()?;
-    let manager = detect_manager()?;
+    let manager = detect_manager(lang)?;
     let news = fetch_news(&cli.news_source, cli.count, lang);
     if let Some(news) = news {
         if !news.is_empty() {
