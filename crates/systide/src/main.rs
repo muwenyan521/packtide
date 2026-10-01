@@ -42,6 +42,7 @@ fn main() -> Result<()> {
         }
     }
     print_intro(lang);
+    messages::log_info(lang, msg(lang, "permission"));
     require_privileged()?;
     let manager = detect_manager()?;
     let news = fetch_news(&cli.news_source, cli.count, lang);

@@ -16,6 +16,7 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
     let path = Path::new("/etc/pacman.d/mirrorlist");
     let text = fs::read_to_string(path).unwrap_or_default();
     let Some(when) = text.lines().find_map(|line| line.strip_prefix("# When:")) else {
+        println!("{}", msg(lang, "mirror_unknown"));
         return Ok(());
     };
     let Ok(timestamp) = parse_date_timestamp(when.trim()) else {

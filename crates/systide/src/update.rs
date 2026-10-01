@@ -32,7 +32,10 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
     print_summary("upgrade", command.program, privilege, command.args);
     let result = run_package_upgrade(manager);
     if result.is_err() {
-        log_error(lang, msg(lang, "partial"));
+        log_error(lang, msg(lang, "partial_title"));
+        log_error(lang, msg(lang, "partial_database"));
+        log_error(lang, msg(lang, "partial_stop"));
+        log_error(lang, msg(lang, "partial_retry"));
         return result.map(|_| ());
     }
     Ok(())
