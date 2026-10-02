@@ -1,6 +1,9 @@
+use std::ffi::OsStr;
 use std::process::ExitStatus;
 
-use crate::{BackendError, BackendId, CapabilitySet, run_privileged, run_status};
+use crate::{
+    BackendError, BackendId, CapabilitySet, CommandPlan, ExecutableResolver, run_command_plan,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandPrivilege {
@@ -52,26 +55,35 @@ pub fn package_upgrade_command(
 }
 
 pub fn run_package_upgrade(backend: BackendId) -> Result<ExitStatus, BackendError> {
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    run_package_upgrade_with_resolver(backend, &resolver)
+}
+
+pub fn run_package_upgrade_with_resolver(
+    backend: BackendId,
+    resolver: &ExecutableResolver,
+) -> Result<ExitStatus, BackendError> {
     let command = package_upgrade_command(backend)?;
-    match command.privilege {
-        PackageUpgradePrivilege::Elevated => {
-            let args = std::iter::once(command.program)
-                .chain(command.args.iter().copied())
-                .collect::<Vec<_>>();
-            run_privileged(&args).map_err(|error| BackendError::CommandFailed {
-                backend,
-                operation: "upgrade packages",
-                message: error.to_string(),
-            })
-        }
-        PackageUpgradePrivilege::User => {
-            run_status(command.program, command.args).map_err(|error| BackendError::CommandFailed {
-                backend,
-                operation: "upgrade packages",
-                message: error.to_string(),
-            })
-        }
-    }
+    let program = resolver
+        .resolve(OsStr::new(command.program))
+        .ok_or_else(|| BackendError::CommandUnavailable {
+            backend,
+            operation: "upgrade packages",
+            command: command.program.to_owned(),
+        })?;
+    let mut plan = CommandPlan::new(program)
+        .with_backend(backend)
+        .with_env_remove("LD_PRELOAD")
+        .with_env_remove("LD_LIBRARY_PATH")
+        .with_locale("C")
+        .with_privilege(command.privilege);
+    plan.args
+        .extend(command.args.iter().map(|arg| (*arg).into()));
+    run_command_plan(&plan).map_err(|error| BackendError::CommandFailed {
+        backend,
+        operation: "upgrade packages",
+        message: error.to_string(),
+    })
 }
 
 /// Builds the upgrade command from a typed backend identifier.
@@ -85,9 +97,11 @@ pub fn package_upgrade_command_for(
 mod tests {
     use super::{
         PackageUpgradePrivilege, package_upgrade_command, package_upgrade_command_for,
-        run_package_upgrade,
+        run_package_upgrade, run_package_upgrade_with_resolver,
     };
     use crate::{BackendError, BackendId, CapabilitySet};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn package_upgrade_command_uses_privileged_pacman_argv() {
@@ -161,5 +175,40 @@ mod tests {
                 capability: CapabilitySet::SYSTEM_UPGRADE,
             }
         );
+    }
+
+    #[test]
+    fn upgrade_plan_resolves_absolute_user_command_and_applies_locale() {
+        let root =
+            std::env::temp_dir().join(format!("system-tools-core-upgrade-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create fixture directory");
+        let executable = root.join("paru");
+        let capture = root.join("capture");
+        fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" \"$LC_ALL\" > '{}'\n",
+                capture.display()
+            ),
+        )
+        .expect("create fake helper");
+        let mut permissions = fs::metadata(&executable)
+            .expect("stat fake helper")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("make fake helper executable");
+        let resolver = crate::ExecutableResolver::from_path(Some(root.as_os_str()));
+
+        run_package_upgrade_with_resolver(BackendId::Paru, &resolver)
+            .expect("fake helper upgrade succeeds");
+        let lines = fs::read_to_string(&capture).expect("read captured plan invocation");
+        let mut lines = lines.lines();
+        assert_eq!(lines.next(), Some(executable.to_str().expect("utf8 path")));
+        assert_eq!(lines.next(), Some("-Su"));
+        assert_eq!(lines.next(), Some("--skipreview"));
+        assert_eq!(lines.next(), Some("C"));
+        assert_eq!(lines.next(), None);
+        fs::remove_dir_all(root).expect("remove fixture directory");
     }
 }

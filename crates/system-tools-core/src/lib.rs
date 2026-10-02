@@ -28,5 +28,5 @@ pub use platform::{
 };
 pub use transaction::{
     CommandPrivilege, PackageUpgradeCommand, PackageUpgradePrivilege, package_upgrade_command,
-    package_upgrade_command_for, run_package_upgrade,
+    package_upgrade_command_for, run_package_upgrade, run_package_upgrade_with_resolver,
 };

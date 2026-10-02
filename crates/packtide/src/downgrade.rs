@@ -1,14 +1,18 @@
 use anyhow::{Context, Result, bail};
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use system_tools_core::PackageSource;
-use system_tools_core::{current_executable, run_capture, run_privileged};
+use system_tools_core::{
+    CommandPlan, CommandPrivilege, current_executable, run_capture, run_command_plan,
+};
 use unicode_width::UnicodeWidthStr;
 
 use crate::transaction::print_summary;
 use crate::ui::{COMMON_FZF_LAYOUT_ARGS, classify_picker_status, picker_columns, picker_header};
 
 pub fn run(query: &[String]) -> Result<()> {
+    let mut downgrade_path = None;
     for (command, capability) in [
         ("fzf", "the package downgrade picker"),
         ("pacman", "downgrade package information"),
@@ -20,7 +24,10 @@ pub fn run(query: &[String]) -> Result<()> {
             "downgrade" => "capability.updates",
             _ => "capability.details",
         };
-        crate::app::require_command_for(command, capability_key, capability, false)?;
+        let path = crate::app::require_command_for(command, capability_key, capability, false)?;
+        if command == "downgrade" {
+            downgrade_path = Some(path);
+        }
     }
     if !["paru", "yay"]
         .iter()
@@ -109,11 +116,16 @@ pub fn run(query: &[String]) -> Result<()> {
     let command = transaction_args(&packages);
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary("downgrade", "downgrade", "sudo", &targets);
-    run_downgrade_transaction(&command)?;
+    run_downgrade_transaction(
+        downgrade_path
+            .as_deref()
+            .expect("downgrade preflight resolved a transaction executable"),
+        &command,
+    )?;
     Ok(())
 }
 
-fn run_downgrade_transaction(command: &[String]) -> Result<()> {
+fn run_downgrade_transaction(program: &Path, command: &[String]) -> Result<()> {
     #[cfg(debug_assertions)]
     if let Some(program) = std::env::var_os("PACKTIDE_TEST_DOWNGRADE_BIN") {
         let status = Command::new(program).args(command).status()?;
@@ -122,7 +134,14 @@ fn run_downgrade_transaction(command: &[String]) -> Result<()> {
         }
         return Ok(());
     }
-    run_privileged(command)?;
+    let mut plan = CommandPlan::new(program.to_owned())
+        .with_env_remove("LD_PRELOAD")
+        .with_env_remove("LD_LIBRARY_PATH")
+        .with_locale("C")
+        .with_privilege(CommandPrivilege::Elevated);
+    plan.args
+        .extend(command.iter().skip(1).map(std::ffi::OsString::from));
+    run_command_plan(&plan)?;
     Ok(())
 }
 

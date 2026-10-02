@@ -21,7 +21,21 @@ pub struct ExecutableResolver {
 
 impl ExecutableResolver {
     pub fn from_path(path: Option<&OsStr>) -> Self {
-        let search_path = path.map(env::split_paths).into_iter().flatten().collect();
+        let cwd = env::current_dir().ok();
+        let search_path = path
+            .map(env::split_paths)
+            .into_iter()
+            .flatten()
+            .filter_map(|directory| {
+                if directory.as_os_str().is_empty() {
+                    cwd.clone()
+                } else if directory.is_absolute() {
+                    Some(directory)
+                } else {
+                    cwd.as_ref().map(|cwd| cwd.join(directory))
+                }
+            })
+            .collect();
         Self {
             search_path,
             cache: RefCell::new(HashMap::new()),
@@ -108,5 +122,36 @@ mod tests {
     fn does_not_resolve_missing_executable() {
         let resolver = ExecutableResolver::from_path(None);
         assert_eq!(resolver.resolve(OsStr::new("missing-tool")), None);
+    }
+
+    #[test]
+    fn anchors_relative_path_entries_and_empty_entries() {
+        let name = format!("system-tools-core-relative-{}", std::process::id());
+        let relative = std::path::PathBuf::from(&name);
+        let absolute = std::env::current_dir()
+            .expect("read current directory")
+            .join(&relative);
+        let executable = absolute.join("fake-tool");
+        let _ = fs::remove_dir_all(&absolute);
+        fs::create_dir_all(&absolute).expect("create fixture directory");
+        fs::write(&executable, "fixture").expect("create fixture executable");
+        let mut permissions = fs::metadata(&executable)
+            .expect("stat fixture executable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).expect("make fixture executable");
+
+        let relative_path = std::env::join_paths([relative.as_os_str()]).expect("encode PATH");
+        assert_eq!(
+            ExecutableResolver::from_path(Some(&relative_path)).resolve(OsStr::new("fake-tool")),
+            Some(executable.clone())
+        );
+        let empty_path = std::env::join_paths([OsStr::new(""), absolute.as_os_str()])
+            .expect("encode empty PATH entry");
+        let resolved = ExecutableResolver::from_path(Some(&empty_path))
+            .resolve(OsStr::new("fake-tool"))
+            .expect("resolve through absolute entry");
+        assert!(resolved.is_absolute());
+        fs::remove_dir_all(absolute).expect("remove fixture directory");
     }
 }
