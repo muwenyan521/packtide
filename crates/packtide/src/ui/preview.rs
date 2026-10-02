@@ -1,5 +1,7 @@
 use anyhow::{Result, bail};
-use system_tools_core::{PackageSource, run_capture};
+use system_tools_core::{
+    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageSource, run_capture,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::sources::valid_package_name;
@@ -25,6 +27,32 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         bail!("{}", crate::locale::text(lang, "preview.invalid_row", &[]));
     }
     let source = parsed.as_ref().map(|row| row.source);
+    let identity_key = parsed
+        .as_ref()
+        .and_then(|row| {
+            row.repository
+                .as_deref()
+                .map(|repo| format!("{repo}/{}", row.name))
+        })
+        .unwrap_or_else(|| package.to_owned());
+    let backend_id = match source {
+        Some(PackageSource::Pacman) => BackendId::Pacman,
+        Some(PackageSource::Aur) => {
+            if crate::app::package_helper().unwrap_or("paru") == "yay" {
+                BackendId::Yay
+            } else {
+                BackendId::Paru
+            }
+        }
+        Some(PackageSource::Flatpak) => BackendId::Flatpak,
+        None => BackendId::Pacman,
+    };
+    let identity = BuiltinBackend::new(backend_id).identity(NativePackageKey::new(identity_key)?);
+    let package = identity
+        .key()
+        .as_str()
+        .rsplit_once('/')
+        .map_or(identity.key().as_str(), |(_, name)| name);
     let helper = crate::app::package_helper().unwrap_or("paru");
     let program = match (kind, source) {
         ("remove", Some(PackageSource::Flatpak)) => "flatpak",

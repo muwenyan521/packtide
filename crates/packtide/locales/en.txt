@@ -39,6 +39,7 @@ backend.native=Native system packages
 backend.optional=Optional source
 scope.system=System
 scope.user=User
+scope.profile=User profile
 capability.catalog=Package catalog
 capability.details=Package details
 capability.search=Search

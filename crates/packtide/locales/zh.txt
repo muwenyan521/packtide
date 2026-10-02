@@ -39,6 +39,7 @@ backend.native=原生系统软件包
 backend.optional=可选软件源
 scope.system=系统
 scope.user=用户
+scope.profile=用户配置
 capability.catalog=软件包目录
 capability.details=软件包详情
 capability.search=搜索
