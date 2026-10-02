@@ -1109,7 +1109,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "xbps" => Some(&[
             "sh",
             "-ec",
-            "xbps-query --version; xbps-install -S; printf 'LIST\\n'; xbps-query -l; printf 'DETAILS\\n'; xbps-query -S bash; printf 'INSTALL\\n'; xbps-install -y curl; printf 'REMOVE\\n'; xbps-remove -Ry curl",
+            "xbps-query --version; xbps-install -i -S -R https://repo-default.voidlinux.org/current/musl; xbps-install -i -y -R https://repo-default.voidlinux.org/current/musl -u xbps; printf 'LIST\\n'; xbps-query -l; printf 'DETAILS\\n'; xbps-query -S xbps; printf 'INSTALL\\n'; xbps-install -i -y -R https://repo-default.voidlinux.org/current/musl curl; printf 'REMOVE\\n'; xbps-remove -Ry curl",
         ]),
         _ => None,
     }
