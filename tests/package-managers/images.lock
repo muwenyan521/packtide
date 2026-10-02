@@ -1,4 +1,7 @@
 # Immutable references used by the disposable matrix. Update digest and evidence together.
+# Optional Linux lanes use official images pinned by digest in the runner:
+# brew = docker.io/homebrew/brew@sha256:b0072bfdebf5934ae24b93b44a1928a88057399b3283ffa0177bb86084fdedfd (default user linuxbrew)
+# nix = docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c (default root; non-root profile remains blocked)
 [[image.alpine]]
 registry = "docker.io/library/alpine"
 tag = "3.20"
