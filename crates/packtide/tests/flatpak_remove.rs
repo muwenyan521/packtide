@@ -98,6 +98,7 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
         .args(["remove"])
         .env("PATH", path)
         .env("PACKTIDE_UI_LANG", "zh")
+        .env("COLUMNS", "30")
         .output()
         .expect("run packtide remove with fake commands");
 
@@ -113,6 +114,10 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     assert!(arguments.contains("\x1b[1;33mPACKTIDE · 卸载软件包\x1b[0m"));
     assert!(arguments.contains("\x1b[33m使用 paru\x1b[0m"));
     assert!(arguments.contains("! 卸载不可逆"));
+    assert!(arguments.contains("Tab:多选"));
+    assert!(arguments.contains("Enter:卸载"));
+    assert!(arguments.contains("Ctrl+R:强制刷新"));
+    assert!(arguments.contains("Esc:退出"));
     assert!(arguments.contains("alt-c:accept"));
     assert!(arguments.contains("正在刷新卸载列表"));
     assert!(arguments.contains("__preview remove"));
@@ -209,6 +214,7 @@ fn default_install_keeps_query_when_no_ai_flag_follows_it() {
         .env("PATH", path)
         .env("XDG_CACHE_HOME", cache)
         .env("PACKTIDE_UI_LANG", "en")
+        .env("COLUMNS", "40")
         .output()
         .expect("run default install entry with fake commands");
 
@@ -224,6 +230,10 @@ fn default_install_keeps_query_when_no_ai_flag_follows_it() {
     assert!(arguments.contains("▌"));
     assert!(arguments.contains("--marker"));
     assert!(arguments.contains("✔"));
+    assert!(arguments.contains("Tab:select"));
+    assert!(arguments.contains("Enter:install"));
+    assert!(arguments.contains("Ctrl+R:refresh"));
+    assert!(arguments.contains("Esc:exit"));
     let arguments = arguments.lines().collect::<Vec<_>>();
     let query_index = arguments
         .iter()
@@ -342,6 +352,8 @@ fn install_fake_picker_covers_preview_accept_and_transaction_argv() {
     assert!(args.contains("--no-wrap"));
     assert!(args.contains("--ellipsis=..."));
     assert!(args.contains("alt-j:last,alt-k:first"));
+    assert!(args.contains("change:first"));
+    assert!(args.contains("load:change-prompt(Packages to install >)"));
     let row = fs::read_to_string(row_output).expect("read selected row");
     let command = fs::read_to_string(command_output).expect("read preview command");
     let preview = fs::read_to_string(preview_output).expect("read preview output");
@@ -444,6 +456,7 @@ fn check_updates_fake_picker_preserves_order_and_cancel_feedback() {
         .env("XDG_CACHE_HOME", cache)
         .env("PACKTIDE_UI_LANG", "en")
         .env("PACKTIDE_TEST_FORCE_INTERACTIVE", "1")
+        .env("COLUMNS", "30")
         .output()
         .expect("run check-updates cancellation fixture");
 
@@ -462,6 +475,10 @@ fn check_updates_fake_picker_preserves_order_and_cancel_feedback() {
     assert!(args.contains("--id-nth=2"));
     assert!(args.contains("reload-sync"));
     assert!(args.contains("--header"));
+    assert!(args.contains("load:change-prompt(Updates available >)"));
+    assert!(args.contains("Esc:exit"));
+    assert!(args.contains("Enter:update system"));
+    assert!(args.contains("Ctrl+R:refresh"));
 }
 
 #[test]
@@ -946,6 +963,7 @@ fn downgrade_picker_uses_localized_header_and_source_colors() {
         .args(["downgrade"])
         .env("PATH", fixture.path())
         .env("PACKTIDE_UI_LANG", "en")
+        .env("COLUMNS", "30")
         .output()
         .expect("run localized downgrade picker");
 
@@ -954,6 +972,9 @@ fn downgrade_picker_uses_localized_header_and_source_colors() {
     assert!(args.contains("PACKTIDE · Downgrade Packages"));
     assert!(args.contains("Packages to downgrade >"));
     assert!(args.contains("__preview downgrade"));
+    assert!(args.contains("Tab:select"));
+    assert!(args.contains("Enter:downgrade"));
+    assert!(args.contains("Esc:exit"));
 }
 
 #[test]

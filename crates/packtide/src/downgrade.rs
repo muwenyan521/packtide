@@ -6,7 +6,7 @@ use system_tools_core::{current_executable, require_command_for, run_capture, ru
 use unicode_width::UnicodeWidthStr;
 
 use crate::transaction::print_summary;
-use crate::ui::{COMMON_FZF_LAYOUT_ARGS, classify_picker_status};
+use crate::ui::{COMMON_FZF_LAYOUT_ARGS, classify_picker_status, picker_columns, picker_header};
 
 pub fn run(query: &[String]) -> Result<()> {
     for (command, capability) in [
@@ -35,8 +35,13 @@ pub fn run(query: &[String]) -> Result<()> {
     let actions = crate::locale::text(lang, "downgrade.actions", &[]);
     let prompt = crate::locale::text(lang, "downgrade.prompt", &[]);
     let using = crate::locale::text(lang, "picker.using", &[("helper", helper)]);
-    let header =
-        format!("\x1b[1;33m{title}\x1b[0m  \x1b[33m{using}\x1b[0m\n\x1b[2m{actions}\x1b[0m");
+    let header = picker_header(
+        title.as_str(),
+        using.as_str(),
+        actions.as_str(),
+        picker_columns(),
+        "1;33",
+    );
     let mut args = vec!["--multi"];
     args.extend_from_slice(COMMON_FZF_LAYOUT_ARGS);
     args.extend([

@@ -111,6 +111,60 @@ fn timing_event(phase: &str, started: Instant) {
     }
 }
 
+fn push_wrapped_item(output: &mut String, line_width: &mut usize, item: &str, columns: usize) {
+    let item_width = UnicodeWidthStr::width(item);
+    let separator_width = if *line_width == 0 { 0 } else { 3 };
+    if *line_width > 0 && line_width.saturating_add(separator_width + item_width) > columns {
+        output.push('\n');
+        *line_width = 0;
+    }
+    if *line_width > 0 {
+        output.push_str(" | ");
+        *line_width += separator_width;
+    }
+    output.push_str(item);
+    *line_width += item_width;
+}
+
+pub(crate) fn wrap_shortcut_line(shortcuts: &str, columns: usize) -> String {
+    let mut output = String::with_capacity(shortcuts.len());
+    let mut line_width = 0;
+    for item in shortcuts.split(" | ") {
+        push_wrapped_item(&mut output, &mut line_width, item, columns);
+    }
+    output
+}
+
+pub(crate) fn picker_columns() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(80)
+        .saturating_sub(8)
+        .max(1)
+}
+
+pub(crate) fn picker_header(
+    title: &str,
+    using: &str,
+    shortcuts: &str,
+    columns: usize,
+    title_color: &str,
+) -> String {
+    let title_width = UnicodeWidthStr::width(title);
+    let using_width = UnicodeWidthStr::width(using);
+    let title_separator = if title_width.saturating_add(using_width + 2) < columns {
+        " ".repeat(columns - title_width - using_width)
+    } else {
+        "\n".to_owned()
+    };
+    let shortcuts = wrap_shortcut_line(shortcuts, columns);
+    format!(
+        "\x1b[{title_color}m{title}\x1b[0m{title_separator}\x1b[33m{using}\x1b[0m\n\x1b[2m{shortcuts}\x1b[0m"
+    )
+}
+
 fn select_rows_with_input(
     helper: &str,
     removing: bool,
@@ -130,7 +184,7 @@ fn select_rows_with_input(
         if removing { "" } else { " --refresh" }
     );
     let reload = format!(
-        "ctrl-r:change-prompt({})+reload-sync({reload_command})+change-prompt({})",
+        "ctrl-r:change-prompt({})+reload-sync({reload_command})",
         crate::locale::text(
             lang,
             if removing {
@@ -139,15 +193,6 @@ fn select_rows_with_input(
                 "install.refresh"
             },
             &[],
-        ),
-        crate::locale::text(
-            lang,
-            if removing {
-                "remove.prompt"
-            } else {
-                "install.prompt"
-            },
-            &[]
         )
     );
     let action = if removing {
@@ -176,26 +221,15 @@ fn select_rows_with_input(
     let refresh = crate::locale::text(lang, "picker.refresh", &[]);
     let exit = crate::locale::text(lang, "picker.exit", &[]);
     let using = crate::locale::text(lang, "picker.using", &[("helper", helper)]);
-    let columns = std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(80);
-    let title_width = UnicodeWidthStr::width(title.as_str());
-    let using_width = UnicodeWidthStr::width(using.as_str());
-    let gap = columns.saturating_sub(title_width + using_width).max(2);
-    let action_line = format!("{action} | {refresh} | {exit}");
-    let action_line =
-        if UnicodeWidthStr::width(action_line.as_str()) + title_width + using_width + 2 > columns {
-            action.to_owned()
-        } else {
-            action_line
-        };
+    let columns = picker_columns();
     let title_color = if removing { "1;33" } else { "1;36" };
-    let yellow_using = format!("\x1b[33m{using}\x1b[0m");
-    let header = format!(
-        "\x1b[{title_color}m{title}\x1b[0m{}{yellow_using}\n\x1b[2m{action_line}\x1b[0m",
-        " ".repeat(gap)
+    let shortcuts = format!("{action} | {refresh} | {exit}");
+    let header = picker_header(
+        title.as_str(),
+        using.as_str(),
+        shortcuts.as_str(),
+        columns,
+        title_color,
     );
     let marker = if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
@@ -203,14 +237,20 @@ fn select_rows_with_input(
     } else {
         None
     };
-    let timing_bind = marker.as_ref().map(|marker| {
+    let timing_action = marker.as_ref().map(|marker| {
         let mark_command = format!(
             "{} __timing-mark {}",
             shell_quote(executable.to_string_lossy().as_ref()),
             shell_quote(marker.to_string_lossy().as_ref())
         );
-        format!("load:execute-silent({mark_command})")
+        format!("execute-silent({mark_command})")
     });
+    let load_bind = match timing_action {
+        Some(timing_action) => {
+            format!("load:change-prompt({prompt})+{timing_action}")
+        }
+        None => format!("load:change-prompt({prompt})"),
+    };
     let mut args = vec!["--multi"];
     args.extend_from_slice(COMMON_FZF_LAYOUT_ARGS);
     args.extend([
@@ -237,12 +277,11 @@ fn select_rows_with_input(
         "alt-j:last,alt-k:first",
         "--bind",
         reload.as_str(),
+        "--bind",
+        load_bind.as_str(),
     ]);
     if removing {
         args.extend(["--bind", "alt-c:accept"]);
-    }
-    if let Some(timing_bind) = &timing_bind {
-        args.extend(["--bind", timing_bind.as_str()]);
     }
     let preview = format!(
         "{} __preview {mode} \"{{}}\"",
@@ -308,9 +347,10 @@ fn select_rows_with_input(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_fzf_status;
+    use super::{classify_fzf_status, picker_header, wrap_shortcut_line};
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
+    use unicode_width::UnicodeWidthStr;
 
     fn status(code: i32) -> ExitStatus {
         ExitStatus::from_raw(code << 8)
@@ -323,5 +363,38 @@ mod tests {
         assert!(!classify_fzf_status(status(130)).expect("interrupt status"));
         assert!(classify_fzf_status(status(2)).is_err());
         assert!(classify_fzf_status(ExitStatus::from_raw(9)).is_err());
+    }
+
+    #[test]
+    fn wraps_shortcuts_without_dropping_any_items() {
+        let shortcuts =
+            wrap_shortcut_line("Tab:select | Enter:install | Ctrl+R:refresh | Esc:exit", 40);
+
+        assert_eq!(
+            shortcuts,
+            "Tab:select | Enter:install\nCtrl+R:refresh | Esc:exit"
+        );
+        assert!(
+            shortcuts
+                .lines()
+                .all(|line| UnicodeWidthStr::width(line) <= 40)
+        );
+    }
+
+    #[test]
+    fn wraps_title_and_helper_without_losing_shortcuts() {
+        let header = picker_header(
+            "PACKTIDE · Install Packages",
+            "Using paru",
+            "Tab:select | Enter:install | Ctrl+R:refresh | Esc:exit",
+            30,
+            "1;36",
+        );
+
+        assert!(header.contains("Install Packages\x1b[0m\n\x1b[33mUsing paru"));
+        assert!(header.contains("Tab:select"));
+        assert!(header.contains("Enter:install"));
+        assert!(header.contains("Ctrl+R:refresh"));
+        assert!(header.contains("Esc:exit"));
     }
 }

@@ -14,7 +14,10 @@ use crate::model::{
     PackageUpdate, parse_cached_updates, parse_flatpak, parse_updates, render_update_rows,
 };
 use crate::transaction::refresh_waybar_cache;
-use crate::ui::{COMMON_FZF_LAYOUT_ARGS, NO_SELECTION, classify_picker_status, shell_quote};
+use crate::ui::{
+    COMMON_FZF_LAYOUT_ARGS, NO_SELECTION, classify_picker_status, picker_columns, shell_quote,
+    wrap_shortcut_line,
+};
 
 pub(crate) fn run(refresh: bool) -> Result<()> {
     let picker_started = Instant::now();
@@ -75,12 +78,15 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         );
         let lang = crate::locale::current();
         let bind = format!(
-            "ctrl-r:change-prompt({})+reload-sync({refresh_command})+change-prompt({})",
+            "ctrl-r:change-prompt({})+reload-sync({refresh_command})",
             crate::locale::text(lang, "updates.refresh", &[]),
-            crate::locale::text(lang, "updates.prompt", &[])
         );
-        let header = crate::locale::text(lang, "updates.header", &[]);
+        let header = wrap_shortcut_line(
+            crate::locale::text(lang, "updates.header", &[]).as_str(),
+            picker_columns(),
+        );
         let prompt = crate::locale::text(lang, "updates.prompt", &[]);
+        let reset_prompt = format!("load:change-prompt({prompt})");
         let start_reload = background_refresh.then(|| format!("start:reload({refresh_command})"));
         let mut args = COMMON_FZF_LAYOUT_ARGS.to_vec();
         args.extend([
@@ -95,6 +101,8 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
             prompt.as_str(),
             "--bind",
             bind.as_str(),
+            "--bind",
+            reset_prompt.as_str(),
         ]);
         if let Some(start_reload) = &start_reload {
             args.extend(["--bind", start_reload.as_str()]);

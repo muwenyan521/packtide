@@ -140,10 +140,10 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
         shell_quote(executable.to_string_lossy().as_ref())
     );
     let bind = format!(
-        "ctrl-r:change-prompt({})+reload-sync({reload})+change-prompt({})",
+        "ctrl-r:change-prompt({})+reload-sync({reload})",
         msg(lang, "list.refresh"),
-        msg(lang, "list.prompt")
     );
+    let reset_prompt = format!("load:change-prompt({})", msg(lang, "list.prompt"));
     let mut args = COMMON_FZF_LAYOUT_ARGS.to_vec();
     args.extend([
         "--delimiter=\t",
@@ -156,6 +156,8 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
         msg(lang, "list.header"),
         "--bind",
         bind.as_str(),
+        "--bind",
+        reset_prompt.as_str(),
     ]);
     let mut child = Command::new("fzf")
         .args(args)

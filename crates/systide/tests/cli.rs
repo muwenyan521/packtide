@@ -90,6 +90,7 @@ fn list_cancel_preserves_source_order_and_localized_layout() {
     assert!(fzf_args.contains("--track"));
     assert!(fzf_args.contains("--id-nth=2"));
     assert!(fzf_args.contains("reload-sync"));
+    assert!(fzf_args.contains("load:change-prompt(待更新项目 >)"));
     assert!(fzf_args.contains("--header"));
     assert!(fzf_args.contains("--prompt"));
     assert!(fzf_args.contains("待更新项目"));
