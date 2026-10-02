@@ -1,12 +1,16 @@
 use std::fs;
 use system_tools_core::{
-    PackageUpgradePrivilege, package_upgrade_command, run_package_upgrade, run_privileged,
+    BackendId, PackageUpgradePrivilege, package_upgrade_command, run_package_upgrade,
+    run_privileged,
 };
 
 use crate::messages::{Lang, log_error, log_info, log_success, log_warn, msg};
 
-pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
-    if matches!(manager, "pacman" | "paru" | "yay") {
+pub(crate) fn run(backend: BackendId, lang: Lang) -> anyhow::Result<()> {
+    if matches!(
+        backend,
+        BackendId::Pacman | BackendId::Paru | BackendId::Yay
+    ) {
         let mut keyrings = vec!["archlinux-keyring"];
         if fs::read_to_string("/etc/pacman.conf")
             .map(|contents| contents.contains("[archlinuxcn]"))
@@ -24,20 +28,20 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
         }
     }
     log_info(lang, msg(lang, "update_step"));
-    let command = package_upgrade_command(manager);
+    let command = package_upgrade_command(backend)?;
     let privilege = match command.privilege {
         PackageUpgradePrivilege::Elevated => "sudo",
         PackageUpgradePrivilege::User => "helper-managed",
     };
     print_summary("upgrade", command.program, privilege, command.args, lang);
-    let result = run_package_upgrade(manager);
+    let result = run_package_upgrade(backend);
     if result.is_err() {
         log_error(lang, msg(lang, "backend.partial"));
         log_error(lang, msg(lang, "partial_title"));
         log_error(lang, msg(lang, "partial_database"));
         log_error(lang, msg(lang, "partial_stop"));
         log_error(lang, msg(lang, "partial_retry"));
-        return result.map(|_| ());
+        return result.map(|_| ()).map_err(anyhow::Error::msg);
     }
     log_success(lang, msg(lang, "update_complete"));
     Ok(())

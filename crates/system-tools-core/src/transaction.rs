@@ -1,7 +1,6 @@
-use anyhow::Result;
 use std::process::ExitStatus;
 
-use crate::{BackendError, CapabilitySet, run_privileged, run_status};
+use crate::{BackendError, BackendId, CapabilitySet, run_privileged, run_status};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandPrivilege {
@@ -18,78 +17,31 @@ pub struct PackageUpgradeCommand<'a> {
     pub privilege: PackageUpgradePrivilege,
 }
 
-pub fn package_upgrade_command(manager: &str) -> PackageUpgradeCommand<'_> {
-    match manager {
-        "pacman" => PackageUpgradeCommand {
-            program: "pacman",
-            args: &["-Su"],
-            privilege: PackageUpgradePrivilege::Elevated,
-        },
-        "paru" => PackageUpgradeCommand {
-            program: "paru",
-            args: &["-Su", "--skipreview"],
-            privilege: PackageUpgradePrivilege::User,
-        },
-        "yay" => PackageUpgradeCommand {
-            program: "yay",
-            args: &["-Su", "--answeredit", "None"],
-            privilege: PackageUpgradePrivilege::User,
-        },
-        _ => PackageUpgradeCommand {
-            program: manager,
-            args: &["-Syu"],
-            privilege: PackageUpgradePrivilege::User,
-        },
-    }
-}
-
-pub fn run_package_upgrade(manager: &str) -> Result<ExitStatus> {
-    let command = package_upgrade_command(manager);
-    match command.privilege {
-        PackageUpgradePrivilege::Elevated => {
-            let args = std::iter::once(command.program)
-                .chain(command.args.iter().copied())
-                .collect::<Vec<_>>();
-            run_privileged(&args)
-        }
-        PackageUpgradePrivilege::User => run_status(command.program, command.args),
-    }
-}
-
-/// Builds the upgrade command from a typed backend identifier.
-pub fn package_upgrade_command_for(
-    backend: crate::BackendId,
+pub fn package_upgrade_command(
+    backend: BackendId,
 ) -> Result<PackageUpgradeCommand<'static>, BackendError> {
     let command = match backend {
-        crate::BackendId::Pacman => PackageUpgradeCommand {
+        BackendId::Pacman => PackageUpgradeCommand {
             program: "pacman",
             args: &["-Su"],
             privilege: PackageUpgradePrivilege::Elevated,
         },
-        crate::BackendId::Paru => PackageUpgradeCommand {
+        BackendId::Paru => PackageUpgradeCommand {
             program: "paru",
             args: &["-Su", "--skipreview"],
             privilege: PackageUpgradePrivilege::User,
         },
-        crate::BackendId::Yay => PackageUpgradeCommand {
+        BackendId::Yay => PackageUpgradeCommand {
             program: "yay",
             args: &["-Su", "--answeredit", "None"],
             privilege: PackageUpgradePrivilege::User,
         },
-        crate::BackendId::Flatpak => PackageUpgradeCommand {
+        BackendId::Flatpak => PackageUpgradeCommand {
             program: "flatpak",
             args: &["update"],
             privilege: PackageUpgradePrivilege::User,
         },
-        crate::BackendId::Apt
-        | crate::BackendId::Dnf5
-        | crate::BackendId::Dnf4
-        | crate::BackendId::Zypper
-        | crate::BackendId::Apk
-        | crate::BackendId::Xbps
-        | crate::BackendId::Snap
-        | crate::BackendId::Brew
-        | crate::BackendId::Nix => {
+        backend => {
             return Err(BackendError::UnsupportedCapability {
                 backend,
                 capability: CapabilitySet::SYSTEM_UPGRADE,
@@ -97,6 +49,36 @@ pub fn package_upgrade_command_for(
         }
     };
     Ok(command)
+}
+
+pub fn run_package_upgrade(backend: BackendId) -> Result<ExitStatus, BackendError> {
+    let command = package_upgrade_command(backend)?;
+    match command.privilege {
+        PackageUpgradePrivilege::Elevated => {
+            let args = std::iter::once(command.program)
+                .chain(command.args.iter().copied())
+                .collect::<Vec<_>>();
+            run_privileged(&args).map_err(|error| BackendError::CommandFailed {
+                backend,
+                operation: "upgrade packages",
+                message: error.to_string(),
+            })
+        }
+        PackageUpgradePrivilege::User => {
+            run_status(command.program, command.args).map_err(|error| BackendError::CommandFailed {
+                backend,
+                operation: "upgrade packages",
+                message: error.to_string(),
+            })
+        }
+    }
+}
+
+/// Builds the upgrade command from a typed backend identifier.
+pub fn package_upgrade_command_for(
+    backend: crate::BackendId,
+) -> Result<PackageUpgradeCommand<'static>, BackendError> {
+    package_upgrade_command(backend)
 }
 
 #[cfg(test)]
@@ -108,7 +90,7 @@ mod tests {
     fn package_upgrade_command_uses_privileged_pacman_argv() {
         // Given pacman as the selected package manager
         // When the shared command spec is built
-        let command = package_upgrade_command("pacman");
+        let command = package_upgrade_command(BackendId::Pacman).expect("pacman is supported");
 
         // Then the invocation is elevated and targets a system upgrade
         assert_eq!(command.program, "pacman");
@@ -120,7 +102,7 @@ mod tests {
     fn package_upgrade_command_preserves_paru_review_flags() {
         // Given paru as the selected package manager
         // When the shared command spec is built
-        let command = package_upgrade_command("paru");
+        let command = package_upgrade_command(BackendId::Paru).expect("paru is supported");
 
         // Then paru remains a direct command with review disabled
         assert_eq!(command.program, "paru");
@@ -132,23 +114,11 @@ mod tests {
     fn package_upgrade_command_preserves_yay_edit_answer() {
         // Given yay as the selected package manager
         // When the shared command spec is built
-        let command = package_upgrade_command("yay");
+        let command = package_upgrade_command(BackendId::Yay).expect("yay is supported");
 
         // Then yay remains a direct command with edit prompts disabled
         assert_eq!(command.program, "yay");
         assert_eq!(command.args, ["-Su", "--answeredit", "None"]);
-        assert_eq!(command.privilege, PackageUpgradePrivilege::User);
-    }
-
-    #[test]
-    fn package_upgrade_command_preserves_other_manager_fallback() {
-        // Given another manager name
-        // When the shared command spec is built
-        let command = package_upgrade_command("custom-manager");
-
-        // Then systide's full-upgrade fallback remains direct
-        assert_eq!(command.program, "custom-manager");
-        assert_eq!(command.args, ["-Syu"]);
         assert_eq!(command.privilege, PackageUpgradePrivilege::User);
     }
 

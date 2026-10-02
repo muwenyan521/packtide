@@ -98,7 +98,8 @@ pub(crate) fn scope_label(lang: Lang, scope: system_tools_core::PackageScope) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{Lang, parse_lang, resolve, source_label, text};
+    use super::{Lang, parse_lang, resolve, scope_label, source_label, text};
+    use system_tools_core::PackageScope;
 
     #[test]
     fn normalizes_locale_region_and_encoding_suffixes() {
@@ -148,5 +149,11 @@ mod tests {
             source_label(Lang::Zh, system_tools_core::PackageSource::Pacman),
             "官方源"
         );
+    }
+
+    #[test]
+    fn profile_scope_renders_a_production_locale_label() {
+        assert_eq!(scope_label(Lang::En, PackageScope::Profile), "User profile");
+        assert_eq!(scope_label(Lang::Zh, PackageScope::Profile), "用户配置");
     }
 }
