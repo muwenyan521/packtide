@@ -9,6 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LOCK: &str = "tests/package-managers/images.lock";
 const DEFAULT_VM_LOCK: &str = "tests/package-managers/ubuntu-cloud-image.lock";
+const BREW_IMAGE: &str = "docker.io/homebrew/brew@sha256:b0072bfdebf5934ae24b93b44a1928a88057399b3283ffa0177bb86084fdedfd";
+const NIX_IMAGE: &str =
+    "docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
@@ -390,17 +393,19 @@ fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
     }
 
     records.push(vm_lane_probe());
-    records.push(unavailable_probe(
+    records.push(probe_optional_image(
         "brew",
-        "optional",
-        None,
-        "Linuxbrew lane has no locked executable image or runner",
+        BREW_IMAGE,
+        [
+            "sh", "-ec", "brew --version; printf 'LIST\\n'; brew search --formula hello; printf 'DETAILS\\n'; brew info --json=v2 hello; printf 'INSTALL\\n'; brew install hello; printf 'REMOVE\\n'; brew uninstall hello",
+        ],
     ));
-    records.push(unavailable_probe(
+    records.push(probe_optional_image(
         "nix",
-        "optional",
-        None,
-        "Nix profile lane has no locked executable image or runner",
+        NIX_IMAGE,
+        [
+            "sh", "-ec", "nix --version; printf 'LIST\\n'; nix profile list --json; printf 'DETAILS\\n'; nix search --json nixpkgs#hello; printf 'INSTALL\\n'; nix profile install nixpkgs#hello; printf 'REMOVE\\n'; nix profile remove 0",
+        ],
     ));
 
     let mut report = String::new();
@@ -500,6 +505,51 @@ fn probe_image(
         architecture: Some(image.arch.clone()),
         package_manager: Some(image.manager.clone()),
         package_manager_version,
+        elapsed_ms: started.elapsed().as_millis(),
+        stdout: stdout.trim().into(),
+        stderr: stderr.trim().into(),
+        error,
+        cleanup,
+    }
+}
+
+fn probe_optional_image(lane: &str, image: &str, args: [&str; 3]) -> ProbeOutput {
+    let name = format!("pm-matrix-{}-{}", std::process::id(), unix_nanos());
+    let mut command = Command::new("podman");
+    command
+        .args(["run", "--rm", "--name", &name, "--network", "bridge"])
+        .arg(image)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let cleanup_guard = CleanupGuard::new(&name);
+    let started = Instant::now();
+    let result = run_bounded(command, COMMAND_TIMEOUT);
+    drop(cleanup_guard);
+    let cleanup = cleanup_check(&name);
+    let (status, stdout, stderr, error) = match result {
+        Ok(output) => (
+            output.status.code().unwrap_or(1),
+            output.stdout,
+            output.stderr,
+            None,
+        ),
+        Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
+    };
+    ProbeOutput {
+        lane: lane.into(),
+        kind: "optional",
+        status,
+        lane_status: if status == 0 { "pass" } else { "fail" },
+        image: Some(image.into()),
+        manifest_digest: image.split('@').nth(1).map(str::to_owned),
+        architecture: Some("amd64".into()),
+        package_manager: Some(lane.into()),
+        package_manager_version: stdout
+            .lines()
+            .find(|line| !line.is_empty())
+            .map(str::to_owned),
         elapsed_ms: started.elapsed().as_millis(),
         stdout: stdout.trim().into(),
         stderr: stderr.trim().into(),
