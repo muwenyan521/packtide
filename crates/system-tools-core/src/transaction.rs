@@ -54,6 +54,32 @@ pub fn run_package_upgrade(manager: &str) -> Result<ExitStatus> {
     }
 }
 
+/// Builds the upgrade command from a typed backend identifier.
+pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeCommand<'static> {
+    match backend {
+        crate::BackendId::Pacman => PackageUpgradeCommand {
+            program: "pacman",
+            args: &["-Su"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        crate::BackendId::Paru => PackageUpgradeCommand {
+            program: "paru",
+            args: &["-Su", "--skipreview"],
+            privilege: PackageUpgradePrivilege::User,
+        },
+        crate::BackendId::Yay => PackageUpgradeCommand {
+            program: "yay",
+            args: &["-Su", "--answeredit", "None"],
+            privilege: PackageUpgradePrivilege::User,
+        },
+        crate::BackendId::Flatpak => PackageUpgradeCommand {
+            program: "flatpak",
+            args: &["update"],
+            privilege: PackageUpgradePrivilege::User,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PackageUpgradePrivilege, package_upgrade_command};
@@ -104,31 +130,5 @@ mod tests {
         assert_eq!(command.program, "custom-manager");
         assert_eq!(command.args, ["-Syu"]);
         assert_eq!(command.privilege, PackageUpgradePrivilege::User);
-    }
-}
-
-/// Builds the upgrade command from a typed backend identifier.
-pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeCommand<'static> {
-    match backend {
-        crate::BackendId::Pacman => PackageUpgradeCommand {
-            program: "pacman",
-            args: &["-Su"],
-            privilege: PackageUpgradePrivilege::Elevated,
-        },
-        crate::BackendId::Paru => PackageUpgradeCommand {
-            program: "paru",
-            args: &["-Su", "--skipreview"],
-            privilege: PackageUpgradePrivilege::User,
-        },
-        crate::BackendId::Yay => PackageUpgradeCommand {
-            program: "yay",
-            args: &["-Su", "--answeredit", "None"],
-            privilege: PackageUpgradePrivilege::User,
-        },
-        crate::BackendId::Flatpak => PackageUpgradeCommand {
-            program: "flatpak",
-            args: &["update"],
-            privilege: PackageUpgradePrivilege::User,
-        },
     }
 }
