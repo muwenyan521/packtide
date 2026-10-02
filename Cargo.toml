@@ -4,6 +4,7 @@ members = [
     "crates/system-tools-core",
     "crates/packtide",
     "crates/systide",
+    "tools/package-manager-matrix",
 ]
 
 [workspace.package]

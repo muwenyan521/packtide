@@ -1,0 +1,1 @@
+{"scenario":"alpine-noop","image":"sha256:not-a-digest","status":1,"error":"invalid image digest: invalid digest: sha256:not-a-digest","cleanup":true}
