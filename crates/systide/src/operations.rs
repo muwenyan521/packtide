@@ -8,23 +8,23 @@ use system_tools_core::{
 
 use crate::messages::{Lang, backend_label, log_info, msg};
 
-pub(crate) fn perform_update(manager: &str, lang: Lang) -> Result<()> {
+pub(crate) fn perform_update(backend: BackendId, lang: Lang) -> Result<()> {
     crate::snapshot::create(lang);
     log_info(lang, msg(lang, "db_step"));
     crate::mirror::check_age(lang)?;
-    crate::update::run(manager, lang)?;
+    crate::update::run(backend, lang)?;
     crate::finish::run(lang)
 }
 
-pub(crate) fn detect_manager(lang: Lang) -> Result<&'static str> {
+pub(crate) fn detect_manager(lang: Lang) -> Result<BackendId> {
     let native = detect_native_backend_from_file("/etc/os-release");
-    manager_for_detection(native, lang)
+    backend_for_detection(native, lang)
 }
 
-fn manager_for_detection(
+fn backend_for_detection(
     native: Result<NativeBackend, system_tools_core::PlatformError>,
     lang: Lang,
-) -> Result<&'static str> {
+) -> Result<BackendId> {
     let native = native.map_err(|error| {
         let key = match error {
             system_tools_core::PlatformError::MissingTool => "backend.missing_tool",
@@ -33,27 +33,25 @@ fn manager_for_detection(
         };
         anyhow::anyhow!("{} ({})", msg(lang, key), msg(lang, "capability.upgrade"))
     })?;
-    let (backend, manager) = match native {
-        NativeBackend::Pacman => (BackendId::Pacman, "pacman"),
-        NativeBackend::Apt
-        | NativeBackend::Dnf
-        | NativeBackend::Zypper
-        | NativeBackend::Apk
-        | NativeBackend::Xbps => {
-            return Err(anyhow::anyhow!(
-                "{} ({})",
-                msg(lang, "backend.unsupported"),
-                backend_label(lang, native)
-            ));
-        }
+    let backend = match native {
+        NativeBackend::Pacman => BackendId::Pacman,
+        NativeBackend::Apt => BackendId::Apt,
+        NativeBackend::Dnf => BackendId::Dnf5,
+        NativeBackend::Zypper => BackendId::Zypper,
+        NativeBackend::Apk => BackendId::Apk,
+        NativeBackend::Xbps => BackendId::Xbps,
     };
     if !BuiltinBackend::new(backend)
         .capabilities()
         .contains(CapabilitySet::SYSTEM_UPGRADE)
     {
-        return Err(anyhow::anyhow!("{}", msg(lang, "backend.unsupported")));
+        return Err(anyhow::anyhow!(
+            "{} ({})",
+            msg(lang, "backend.unsupported"),
+            backend_label(lang, native),
+        ));
     }
-    Ok(manager)
+    Ok(backend)
 }
 
 #[cfg(test)]
@@ -61,8 +59,8 @@ fn detect_manager_from_input(
     os_release: &str,
     command_available: impl Fn(&std::ffi::OsStr) -> bool,
     lang: Lang,
-) -> Result<&'static str> {
-    manager_for_detection(detect_native_backend(os_release, command_available), lang)
+) -> Result<BackendId> {
+    backend_for_detection(detect_native_backend(os_release, command_available), lang)
 }
 
 #[cfg(test)]
@@ -70,6 +68,7 @@ mod tests {
     use super::detect_manager_from_input;
     use crate::messages::{Lang, msg};
     use std::ffi::OsStr;
+    use system_tools_core::BackendId;
 
     #[test]
     fn arch_uses_pacman_when_native_command_is_available() {
@@ -79,7 +78,7 @@ mod tests {
             Lang::En,
         )
         .expect("Arch should select pacman");
-        assert_eq!(manager, "pacman");
+        assert_eq!(manager, BackendId::Pacman);
     }
 
     #[test]

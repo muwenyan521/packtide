@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         println!("{}", msg(lang, "cancel"));
         return Ok(());
     }
-    if !confirm_start(lang, manager)? {
+    if !confirm_start(lang, manager.as_str())? {
         println!("{}", msg(lang, "cancel"));
         return Ok(());
     }

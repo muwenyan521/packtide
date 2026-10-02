@@ -6,7 +6,8 @@ use std::io::Write;
 use std::process::{Command, ExitStatus};
 use std::time::Instant;
 use system_tools_core::{
-    ExecutableResolver, current_executable, require_command_for, run_capture_path,
+    BackendId, BuiltinBackend, CapabilitySet, ExecutableResolver, NativeBackend, PackageBackend,
+    current_executable, detect_native_backend_from_file, require_command_for, run_capture_path,
 };
 
 const COMMON_FZF_LAYOUT_ARGS: &[&str] = &[
@@ -37,13 +38,34 @@ fn classify_fzf_status(status: ExitStatus) -> Result<bool> {
 }
 
 pub(crate) fn collect_update_rows(lang: Lang) -> Result<String> {
+    let native = detect_native_backend_from_file("/etc/os-release").ok();
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    collect_update_rows_with_resolver(lang, native, &resolver)
+}
+
+fn collect_update_rows_with_resolver(
+    lang: Lang,
+    native: Option<NativeBackend>,
+    resolver: &ExecutableResolver,
+) -> Result<String> {
     let mut rows = String::new();
     let mut seen = HashSet::new();
-    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
-    let checkupdates = resolver.resolve(OsStr::new("checkupdates"));
-    let helper = resolver
-        .resolve(OsStr::new("paru"))
-        .or_else(|| resolver.resolve(OsStr::new("yay")));
+    let arch_updates = native.is_some_and(|backend| {
+        matches!(backend, NativeBackend::Pacman)
+            && BuiltinBackend::new(BackendId::Pacman)
+                .capabilities()
+                .contains(CapabilitySet::UPDATES)
+    });
+    let checkupdates = arch_updates
+        .then(|| resolver.resolve(OsStr::new("checkupdates")))
+        .flatten();
+    let helper = arch_updates
+        .then(|| {
+            resolver
+                .resolve(OsStr::new("paru"))
+                .or_else(|| resolver.resolve(OsStr::new("yay")))
+        })
+        .flatten();
     let flatpak = resolver.resolve(OsStr::new("flatpak"));
     let (repo, aur, flatpak) = std::thread::scope(|scope| -> Result<_> {
         let repo = scope.spawn(move || {
@@ -203,9 +225,47 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_fzf_status;
+    use super::{classify_fzf_status, collect_update_rows_with_resolver};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::ExitStatusExt;
+    use std::path::PathBuf;
     use std::process::ExitStatus;
+    use system_tools_core::{ExecutableResolver, NativeBackend};
+
+    fn fixture() -> (PathBuf, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "systide-ui-native-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir(&path).expect("create fixture");
+        let marker_dir = path.join("markers");
+        fs::create_dir(&marker_dir).expect("create marker directory");
+        for (name, body) in [
+            ("checkupdates", "printf 'repo 1 -> 2\\n'"),
+            ("paru", "printf 'aur 1 -> 2\\n'"),
+            ("flatpak", "printf 'org.example.App 2\\n'"),
+        ] {
+            let file = path.join(name);
+            let marker = marker_dir.join(name);
+            fs::write(
+                &file,
+                format!("#!/bin/sh\ntouch '{}'\n{}\n", marker.display(), body),
+            )
+            .expect("write fixture command");
+            let mut permissions = fs::metadata(&file)
+                .expect("stat fixture command")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&file, permissions).expect("chmod fixture command");
+        }
+        (path, marker_dir)
+    }
 
     fn status(code: i32) -> ExitStatus {
         ExitStatus::from_raw(code << 8)
@@ -218,5 +278,40 @@ mod tests {
         assert!(!classify_fzf_status(status(130)).expect("interrupt status"));
         assert!(classify_fzf_status(status(2)).is_err());
         assert!(classify_fzf_status(ExitStatus::from_raw(9)).is_err());
+    }
+
+    #[test]
+    fn non_arch_native_list_skips_arch_only_providers() {
+        let (path, markers) = fixture();
+        let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
+        let rows =
+            collect_update_rows_with_resolver(super::Lang::En, Some(NativeBackend::Apt), &resolver)
+                .expect("collect non-Arch rows");
+        assert!(!rows.contains("[Pacman]"));
+        assert!(!rows.contains("[AUR]"));
+        assert!(rows.contains("[Flatpak]"));
+        assert!(!markers.join("checkupdates").exists());
+        assert!(!markers.join("paru").exists());
+        assert!(markers.join("flatpak").exists());
+        fs::remove_dir_all(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn arch_native_list_preserves_pacman_and_aur_providers() {
+        let (path, markers) = fixture();
+        let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
+        let rows = collect_update_rows_with_resolver(
+            super::Lang::En,
+            Some(NativeBackend::Pacman),
+            &resolver,
+        )
+        .expect("collect Arch rows");
+        assert!(rows.contains("[Pacman]"));
+        assert!(rows.contains("[AUR]"));
+        assert!(rows.contains("[Flatpak]"));
+        assert!(markers.join("checkupdates").exists());
+        assert!(markers.join("paru").exists());
+        assert!(markers.join("flatpak").exists());
+        fs::remove_dir_all(path).expect("remove fixture");
     }
 }
