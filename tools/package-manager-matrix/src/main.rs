@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LOCK: &str = "tests/package-managers/images.lock";
+const DEFAULT_VM_LOCK: &str = "tests/package-managers/ubuntu-cloud-image.lock";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone, Debug)]
@@ -17,6 +18,32 @@ struct Image {
     arch: String,
     manager: String,
     version: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CloudImage {
+    url: String,
+    sha256: String,
+    arch: String,
+    release: String,
+}
+
+#[derive(Debug)]
+struct ProbeOutput {
+    lane: String,
+    kind: &'static str,
+    status: i32,
+    lane_status: &'static str,
+    image: Option<String>,
+    manifest_digest: Option<String>,
+    architecture: Option<String>,
+    package_manager: Option<String>,
+    package_manager_version: Option<String>,
+    elapsed_ms: u128,
+    stdout: String,
+    stderr: String,
+    error: Option<String>,
+    cleanup: bool,
 }
 
 fn main() -> Result<()> {
@@ -52,7 +79,7 @@ fn main() -> Result<()> {
                     bail!("unknown all argument: {arg}");
                 }
             }
-            probe_alpine(None, evidence.as_deref())
+            probe_all(evidence.as_deref())
         }
         _ => bail!("usage: package-manager-matrix <doctor|list-images|probe-alpine|all> [options]"),
     }
@@ -63,34 +90,75 @@ fn doctor() -> Result<()> {
     let qemu = command_version("qemu-system-x86_64");
     let kvm = Path::new("/dev/kvm").exists();
     let cloud_init = command_version("cloud-init");
+    let mut missing = Vec::new();
+    if podman.is_none() {
+        missing.push("podman");
+    }
+    if qemu.is_none() {
+        missing.push("qemu-system-x86_64");
+    }
+    if !kvm {
+        missing.push("/dev/kvm");
+    }
+    if cloud_init.is_none() {
+        missing.push("cloud-init");
+    }
+    let status = if missing.is_empty() { "pass" } else { "fail" };
     println!(
-        "{{\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_init\":{}}}",
+        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_init\":{},\"cloud_init_required\":true,\"missing\":{}}}",
+        json_string(status),
         json_string(podman.as_deref().unwrap_or("MISSING")),
         json_string(qemu.as_deref().unwrap_or("MISSING")),
         kvm,
-        json_string(cloud_init.as_deref().unwrap_or("MISSING"))
+        json_string(cloud_init.as_deref().unwrap_or("MISSING")),
+        json_array(&missing)
     );
-    if podman.is_none() || qemu.is_none() || !kvm {
-        bail!("doctor failed: Podman, QEMU and /dev/kvm are required");
+    if !missing.is_empty() {
+        bail!(
+            "doctor failed: required matrix tooling is missing ({})",
+            missing.join(", ")
+        );
     }
     Ok(())
 }
 
 fn list_images(path: &Path) -> Result<()> {
     let images = read_lock(path)?;
+    let mut failures = Vec::new();
     for image in images {
-        validate_digest(&image.digest)?;
-        verify_manifest(&image)?;
+        let validation = validate_image(&image)
+            .and_then(|_| verify_manifest(&image))
+            .and_then(|_| {
+                probe_command(&image.manager).context("locked lane has no executable probe")
+            });
+        let error = validation.as_ref().err().map(ToString::to_string);
+        if error.is_some() {
+            failures.push(image.name.clone());
+        }
         println!(
-            "{{\"name\":{},\"registry\":{},\"tag\":{},\"manifest_digest\":{},\"architecture\":{},\"package_manager\":{},\"version\":{}}}",
+            "{{\"name\":{},\"registry\":{},\"tag\":{},\"manifest_digest\":{},\"architecture\":{},\"package_manager\":{},\"version\":{},\"lane\":{},\"probe\":{},\"validation\":{},\"error\":{}}}",
             json_string(&image.name),
             json_string(&image.registry),
             json_string(&image.tag),
             json_string(&image.digest),
             json_string(&image.arch),
             json_string(&image.manager),
-            json_string(&image.version)
+            json_string(&image.version),
+            json_string(&image.name),
+            json_string(
+                probe_command(&image.manager)
+                    .map(|_| "supported")
+                    .unwrap_or("unavailable")
+            ),
+            json_string(if error.is_some() { "fail" } else { "pass" }),
+            error
+                .as_deref()
+                .map(json_string)
+                .unwrap_or_else(|| "null".into())
         );
+    }
+    if !failures.is_empty() {
+        bail!("image lock validation failed for: {}", failures.join(", "));
     }
     Ok(())
 }
@@ -110,6 +178,22 @@ fn verify_manifest(image: &Image) -> Result<()> {
     }
     let body = String::from_utf8_lossy(&output.stdout);
     if body.contains(&image.digest) {
+        if body.contains("\"manifests\"") {
+            match manifest_architecture(&body, &image.digest) {
+                Some(architecture) if architecture == image.arch => {}
+                Some(architecture) => bail!(
+                    "locked digest {} resolves architecture {}, expected {}",
+                    image.digest,
+                    architecture,
+                    image.arch
+                ),
+                None => bail!(
+                    "manifest {} has no platform architecture for locked digest {}",
+                    reference,
+                    image.digest
+                ),
+            }
+        }
         return Ok(());
     }
     // Podman reports a single-image manifest without an index digest. Verify
@@ -125,6 +209,26 @@ fn verify_manifest(image: &Image) -> Result<()> {
         bail!("manifest inspect did not resolve locked digest {reference}");
     }
     Ok(())
+}
+
+fn manifest_architecture(body: &str, digest: &str) -> Option<String> {
+    let marker = format!("\"digest\": \"{digest}\"");
+    let mut matched = false;
+    for line in body.lines() {
+        let line = line.trim();
+        if !matched {
+            if line.starts_with(&marker) {
+                matched = true;
+            }
+            continue;
+        }
+        let marker = "\"architecture\": \"";
+        if let Some(start) = line.strip_prefix(marker) {
+            let end = start.find('"')?;
+            return Some(start[..end].into());
+        }
+    }
+    None
 }
 
 fn probe_alpine(requested: Option<&str>, evidence_path: Option<&Path>) -> Result<()> {
@@ -150,7 +254,107 @@ fn probe_alpine(requested: Option<&str>, evidence_path: Option<&Path>) -> Result
         bail!("invalid image digest (expected sha256:<64 hex>)");
     }
     let full_ref = format!("{}@{}", image.registry, ref_name);
+    let probe = probe_image(image, ref_name, Some(full_ref), "alpine-noop");
+    let json = render_probe(&probe);
+    write_evidence(evidence_path, &format!("{json}\n"))?;
+    println!("{json}");
+    if probe.status != 0 {
+        bail!("Alpine probe failed with status {}", probe.status);
+    }
+    Ok(())
+}
+
+fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
+    let images = read_lock(Path::new(DEFAULT_LOCK))?;
+    let mut records = Vec::with_capacity(images.len() + 3);
+    for image in &images {
+        let record = match validate_image(image).and_then(|_| verify_manifest(image)) {
+            Ok(()) => match probe_command(&image.manager) {
+                Some(_) => probe_image(
+                    image,
+                    &image.digest,
+                    Some(format!("{}@{}", image.registry, image.digest)),
+                    "matrix-container",
+                ),
+                None => unavailable_probe(
+                    &image.name,
+                    "container",
+                    Some(format!("{}@{}", image.registry, image.digest)),
+                    format!(
+                        "locked package manager '{}' has no executable probe",
+                        image.manager
+                    ),
+                ),
+            },
+            Err(error) => failed_probe(
+                &image.name,
+                "container",
+                Some(format!("{}@{}", image.registry, image.digest)),
+                error.to_string(),
+            ),
+        };
+        records.push(record);
+    }
+
+    records.push(vm_lane_probe());
+    records.push(unavailable_probe(
+        "brew",
+        "optional",
+        None,
+        "Linuxbrew lane has no locked executable image or runner",
+    ));
+    records.push(unavailable_probe(
+        "nix",
+        "optional",
+        None,
+        "Nix profile lane has no locked executable image or runner",
+    ));
+
+    let mut report = String::new();
+    let mut failed = Vec::new();
+    for record in &records {
+        if record.status != 0 {
+            failed.push(record.lane.as_str());
+        }
+        let json = render_probe(record);
+        println!("{json}");
+        report.push_str(&json);
+        report.push('\n');
+    }
+    let aggregate_status = if failed.is_empty() { 0 } else { 1 };
+    let aggregate = format!(
+        "{{\"scenario\":\"matrix\",\"status\":{},\"lane_status\":{},\"lanes\":{},\"failed_lanes\":{}}}",
+        aggregate_status,
+        json_string(if aggregate_status == 0 {
+            "pass"
+        } else {
+            "fail"
+        }),
+        records.len(),
+        json_array(&failed)
+    );
+    println!("{aggregate}");
+    report.push_str(&aggregate);
+    report.push('\n');
+    write_evidence(evidence_path, &report)?;
+    if aggregate_status != 0 {
+        bail!(
+            "matrix failed or unavailable for lanes: {}",
+            failed.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn probe_image(
+    image: &Image,
+    digest: &str,
+    full_ref: Option<String>,
+    _scenario: &'static str,
+) -> ProbeOutput {
+    let full_ref = full_ref.unwrap_or_else(|| format!("{}@{}", image.registry, digest));
     let name = format!("pm-matrix-{}-{}", std::process::id(), unix_nanos());
+    let args = probe_command(&image.manager).expect("probe_image called for supported manager");
     let mut command = Command::new("podman");
     command
         .args([
@@ -161,14 +365,15 @@ fn probe_alpine(requested: Option<&str>, evidence_path: Option<&Path>) -> Result
             "--network",
             "none",
             &full_ref,
-            "apk",
-            "--print-arch",
         ])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let cleanup_guard = CleanupGuard::new(&name);
     let started = Instant::now();
     let result = run_bounded(command, COMMAND_TIMEOUT);
+    drop(cleanup_guard);
     let cleanup = cleanup_check(&name);
     let (status, stdout, stderr, error) = match result {
         Ok(output) => (
@@ -179,32 +384,164 @@ fn probe_alpine(requested: Option<&str>, evidence_path: Option<&Path>) -> Result
         ),
         Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
     };
-    let json = format!(
-        "{{\"scenario\":\"alpine-noop\",\"image\":{},\"manifest_digest\":{},\"architecture\":{},\"package_manager\":{},\"package_manager_version\":{},\"status\":{},\"elapsed_ms\":{},\"stdout\":{},\"stderr\":{},\"error\":{},\"cleanup\":{}}}",
-        json_string(&full_ref),
-        json_string(&image.digest),
-        json_string(&image.arch),
-        json_string(&image.manager),
-        json_string(&image.version),
+    ProbeOutput {
+        lane: image.name.clone(),
+        kind: "container",
         status,
-        started.elapsed().as_millis(),
-        json_string(stdout.trim()),
-        json_string(stderr.trim()),
-        error
+        lane_status: if status == 0 { "pass" } else { "fail" },
+        image: Some(full_ref),
+        manifest_digest: Some(image.digest.clone()),
+        architecture: Some(image.arch.clone()),
+        package_manager: Some(image.manager.clone()),
+        package_manager_version: Some(image.version.clone()),
+        elapsed_ms: started.elapsed().as_millis(),
+        stdout: stdout.trim().into(),
+        stderr: stderr.trim().into(),
+        error,
+        cleanup,
+    }
+}
+
+fn failed_probe(
+    lane: &str,
+    kind: &'static str,
+    image: Option<String>,
+    error: String,
+) -> ProbeOutput {
+    ProbeOutput {
+        lane: lane.into(),
+        kind,
+        status: 1,
+        lane_status: "fail",
+        image,
+        manifest_digest: None,
+        architecture: None,
+        package_manager: None,
+        package_manager_version: None,
+        elapsed_ms: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: Some(error),
+        cleanup: true,
+    }
+}
+
+fn unavailable_probe(
+    lane: &str,
+    kind: &'static str,
+    image: Option<String>,
+    reason: impl Into<String>,
+) -> ProbeOutput {
+    ProbeOutput {
+        lane: lane.into(),
+        kind,
+        status: 1,
+        lane_status: "unavailable",
+        image,
+        manifest_digest: None,
+        architecture: None,
+        package_manager: None,
+        package_manager_version: None,
+        elapsed_ms: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: Some(reason.into()),
+        cleanup: true,
+    }
+}
+
+fn vm_lane_probe() -> ProbeOutput {
+    match read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK)) {
+        Ok(image) => {
+            let mut missing = Vec::new();
+            if command_version("qemu-system-x86_64").is_none() {
+                missing.push("qemu-system-x86_64");
+            }
+            if !Path::new("/dev/kvm").exists() {
+                missing.push("/dev/kvm");
+            }
+            if command_version("cloud-init").is_none() {
+                missing.push("cloud-init");
+            }
+            let reason = if missing.is_empty() {
+                format!(
+                    "Snap VM orchestration is not implemented; locked cloud image {} is metadata-only",
+                    image.url
+                )
+            } else {
+                format!(
+                    "Snap VM lane unavailable: missing {} (locked image {} sha256:{})",
+                    missing.join(", "),
+                    image.url,
+                    image.sha256
+                )
+            };
+            unavailable_probe("snap-vm", "vm", Some(image.url), reason)
+        }
+        Err(error) => failed_probe("snap-vm", "vm", None, error.to_string()),
+    }
+}
+
+fn render_probe(probe: &ProbeOutput) -> String {
+    let scenario = if probe.kind == "container" {
+        if probe.lane == "alpine" {
+            "alpine-noop"
+        } else {
+            "container-probe"
+        }
+    } else {
+        "matrix-lane"
+    };
+    format!(
+        "{{\"scenario\":{},\"lane\":{},\"kind\":{},\"status\":{},\"lane_status\":{},\"image\":{},\"manifest_digest\":{},\"architecture\":{},\"package_manager\":{},\"package_manager_version\":{},\"elapsed_ms\":{},\"stdout\":{},\"stderr\":{},\"error\":{},\"cleanup\":{}}}",
+        json_string(scenario),
+        json_string(&probe.lane),
+        json_string(probe.kind),
+        probe.status,
+        json_string(probe.lane_status),
+        probe
+            .image
             .as_deref()
             .map(json_string)
             .unwrap_or_else(|| "null".into()),
-        cleanup
-    );
-    if let Some(path) = evidence_path {
+        probe
+            .manifest_digest
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".into()),
+        probe
+            .architecture
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".into()),
+        probe
+            .package_manager
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".into()),
+        probe
+            .package_manager_version
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".into()),
+        probe.elapsed_ms,
+        json_string(&probe.stdout),
+        json_string(&probe.stderr),
+        probe
+            .error
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".into()),
+        probe.cleanup
+    )
+}
+
+fn write_evidence(path: Option<&Path>, content: &str) -> Result<()> {
+    if let Some(path) = path {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, format!("{json}\n"))?;
-    }
-    println!("{json}");
-    if status != 0 {
-        bail!("Alpine probe failed with status {status}");
+        fs::write(path, content)?;
     }
     Ok(())
 }
@@ -254,6 +591,84 @@ fn cleanup_check(name: &str) -> bool {
                 .any(|line| line.trim() == name)
         })
         .unwrap_or(false)
+}
+
+struct CleanupGuard {
+    name: String,
+}
+
+impl CleanupGuard {
+    fn new(name: &str) -> Self {
+        Self { name: name.into() }
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("podman")
+            .args(["rm", "--force", "--ignore", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
+    match manager {
+        "apk" => Some(&["apk", "--print-arch"]),
+        "apt" => Some(&["apt-get", "--version"]),
+        "dnf5" => Some(&["dnf5", "--version"]),
+        "dnf4" => Some(&["dnf", "--version"]),
+        "zypper" => Some(&["zypper", "--version"]),
+        "xbps" => Some(&["xbps-query", "--version"]),
+        _ => None,
+    }
+}
+
+fn validate_image(image: &Image) -> Result<()> {
+    if image.name.is_empty()
+        || image.registry.is_empty()
+        || image.tag.is_empty()
+        || image.arch.is_empty()
+        || image.manager.is_empty()
+        || image.version.is_empty()
+    {
+        bail!("locked image {} has missing required fields", image.name);
+    }
+    validate_digest(&image.digest)
+}
+
+fn read_cloud_image_lock(path: &Path) -> Result<CloudImage> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("read cloud image lock {}", path.display()))?;
+    let mut image = CloudImage::default();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line
+            .split_once('=')
+            .with_context(|| format!("invalid cloud image lock line: {line}"))?;
+        let value = value.trim().trim_matches('"');
+        match key.trim() {
+            "url" => image.url = value.into(),
+            "sha256" => image.sha256 = value.into(),
+            "architecture" => image.arch = value.into(),
+            "release" => image.release = value.into(),
+            _ => {}
+        }
+    }
+    if !image.url.starts_with("https://") {
+        bail!("cloud image lock URL must use https");
+    }
+    if image.sha256.len() != 64 || !image.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("cloud image lock has invalid sha256");
+    }
+    if image.arch.is_empty() || image.release.is_empty() {
+        bail!("cloud image lock is missing architecture or release");
+    }
+    Ok(image)
 }
 
 fn read_lock(path: &Path) -> Result<Vec<Image>> {
@@ -349,6 +764,19 @@ fn json_string(value: &str) -> String {
     escaped.push('"');
     escaped
 }
+
+fn json_array(values: &[&str]) -> String {
+    let mut output = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        output.push_str(&json_string(value));
+    }
+    output.push(']');
+    output
+}
+
 fn unix_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -375,6 +803,53 @@ mod tests {
         let alpine = images.iter().find(|i| i.name == "alpine").unwrap();
         assert!(!alpine.registry.is_empty());
         assert!(!alpine.version.is_empty());
+    }
+    #[test]
+    fn every_locked_container_has_a_probe_command() {
+        let images = read_lock(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/package-managers/images.lock")
+                .as_path(),
+        )
+        .unwrap();
+        assert_eq!(images.len(), 5);
+        for image in &images {
+            validate_image(image).unwrap();
+            assert!(probe_command(&image.manager).is_some(), "{}", image.name);
+        }
+    }
+    #[test]
+    fn cloud_image_lock_is_metadata_and_validated() {
+        let image = read_cloud_image_lock(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/package-managers/ubuntu-cloud-image.lock")
+                .as_path(),
+        )
+        .unwrap();
+        assert!(image.url.starts_with("https://"));
+        assert_eq!(image.sha256.len(), 64);
+        assert!(!image.release.is_empty());
+    }
+    #[test]
+    fn unavailable_lane_is_never_rendered_as_a_pass() {
+        let probe = unavailable_probe("nix", "optional", None, "not locked");
+        let rendered = render_probe(&probe);
+        assert_eq!(probe.status, 1);
+        assert!(rendered.contains("\"lane_status\":\"unavailable\""));
+        assert!(rendered.contains("\"status\":1"));
+    }
+    #[test]
+    fn manifest_architecture_is_bound_to_the_locked_digest() {
+        let body = r#"
+            "digest": "sha256:wrong",
+            "architecture": "arm64",
+            "digest": "sha256:right",
+            "architecture": "amd64",
+        "#;
+        assert_eq!(
+            manifest_architecture(body, "sha256:right").as_deref(),
+            Some("amd64")
+        );
     }
     #[test]
     fn json_string_escapes_control_characters() {

@@ -18,7 +18,7 @@ version = "2.6.1"
 [[image.fedora]]
 registry = "registry.fedoraproject.org/fedora"
 tag = "41"
-manifest_digest = "sha256:fd6900fd292fc2e8eb2ce9c09d346f3f55333b5b283d64b88630cdf03845bc71"
+manifest_digest = "sha256:3fb969dd07e631c17d12f5955bcb6db2078a6997eb68be76b6492e7bd6052e88"
 architecture = "amd64"
 package_manager = "dnf5"
 version = "5.2.0"
