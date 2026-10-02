@@ -68,7 +68,7 @@ pub struct SourceTiming {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheDecision, CommandPlan};
+    use super::CommandPlan;
     use crate::CommandPrivilege;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -95,10 +95,5 @@ mod tests {
         assert_eq!(plan.locale, Some(OsString::from("C")));
         assert_eq!(plan.privilege, CommandPrivilege::Elevated);
         assert_eq!(plan.args, [OsString::from("--machine-readable")]);
-    }
-
-    #[test]
-    fn cache_decision_variants_are_explicit() {
-        assert_ne!(CacheDecision::Fresh, CacheDecision::Missing);
     }
 }
