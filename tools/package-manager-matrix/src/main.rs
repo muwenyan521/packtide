@@ -1,13 +1,34 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LOCK: &str = "tests/package-managers/images.lock";
 const DEFAULT_VM_LOCK: &str = "tests/package-managers/ubuntu-cloud-image.lock";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+fn install_signal_handlers() {
+    unsafe extern "C" fn handler(_: libc::c_int) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    }
+    unsafe {
+        libc::signal(libc::SIGINT, handler as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, handler as *const () as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn install_signal_handlers() {}
+
+fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
+}
 
 #[derive(Clone, Debug)]
 struct Image {
@@ -47,6 +68,7 @@ struct ProbeOutput {
 }
 
 fn main() -> Result<()> {
+    install_signal_handlers();
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "doctor".into());
     match command.as_str() {
@@ -442,8 +464,21 @@ fn probe_image(
         ),
         Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
     };
-    let package_manager_version =
-        parse_manager_version(&image.manager, &stdout).or_else(|| Some(image.version.clone()));
+    let package_manager_version = parse_manager_version(&image.manager, &stdout);
+    let (status, error) =
+        if status == 0 && package_manager_version.as_deref() != Some(image.version.as_str()) {
+            (
+                1,
+                Some(format!(
+                    "{} version mismatch: expected {}, observed {}",
+                    image.manager,
+                    image.version,
+                    package_manager_version.as_deref().unwrap_or("unavailable")
+                )),
+            )
+        } else {
+            (status, error)
+        };
     ProbeOutput {
         lane: image.name.clone(),
         kind: "container",
@@ -520,8 +555,8 @@ fn vm_lane_probe() -> ProbeOutput {
             if !Path::new("/dev/kvm").exists() {
                 missing.push("/dev/kvm");
             }
-            if command_version("cloud-init").is_none() {
-                missing.push("cloud-init");
+            if command_version("cloud-localds").is_none() {
+                missing.push("cloud-localds");
             }
             let checksum = if missing.is_empty() {
                 verify_cloud_image(&image).err().map(|e| e.to_string())
@@ -552,13 +587,18 @@ fn vm_lane_probe() -> ProbeOutput {
 fn verify_cloud_image(image: &CloudImage) -> Result<()> {
     let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
     let result = download_cloud_image(image, &path);
-    let _ = fs::remove_file(&path);
+    let cleanup = fs::remove_file(&path);
+    if let Err(error) = cleanup {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error).context("remove cloud image temp file");
+        }
+    }
     result
 }
 
 fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
     let result = (|| {
-        let status = Command::new("curl")
+        let mut child = Command::new("curl")
             .args([
                 "--fail",
                 "--location",
@@ -568,8 +608,26 @@ fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
             ])
             .arg(path)
             .arg(&image.url)
-            .status()
+            .spawn()
             .context("download cloud image")?;
+        let start = Instant::now();
+        let status = loop {
+            if interrupted() {
+                terminate(&mut child);
+                bail!("cloud image download interrupted");
+            }
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if start.elapsed() >= COMMAND_TIMEOUT {
+                terminate(&mut child);
+                bail!(
+                    "cloud image download exceeded {}s",
+                    COMMAND_TIMEOUT.as_secs()
+                );
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
         if !status.success() {
             bail!("curl exited with {status}");
         }
@@ -606,7 +664,7 @@ fn verify_cloud_image_lock() -> Result<()> {
 
 fn vm_run() -> Result<()> {
     let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
-    let missing = ["qemu-system-x86_64", "qemu-img", "cloud-init"]
+    let missing = ["qemu-system-x86_64", "qemu-img", "cloud-localds"]
         .into_iter()
         .filter(|tool| command_version(tool).is_none())
         .collect::<Vec<_>>();
@@ -633,6 +691,23 @@ fn vm_run() -> Result<()> {
     if !status.success() {
         bail!("qemu-img exited with {status}");
     }
+    let user_data = work.join("user-data");
+    let meta_data = work.join("meta-data");
+    let seed = work.join("seed.iso");
+    fs::write(&user_data, b"#cloud-config\nruncmd:\n  - [ sh, -c, 'echo PM_MATRIX_GUEST_OK > /dev/ttyS0; poweroff -f' ]\n")?;
+    fs::write(
+        &meta_data,
+        b"instance-id: pm-matrix\nlocal-hostname: pm-matrix\n",
+    )?;
+    let status = Command::new("cloud-localds")
+        .arg(&seed)
+        .arg(&user_data)
+        .arg(&meta_data)
+        .status()
+        .context("create cloud-init seed")?;
+    if !status.success() {
+        bail!("cloud-localds exited with {status}");
+    }
     let child = Command::new("qemu-system-x86_64")
         .args([
             "-enable-kvm",
@@ -644,14 +719,21 @@ fn vm_run() -> Result<()> {
             "-drive",
         ])
         .arg(format!("file={},if=virtio,format=qcow2", overlay.display()))
+        .args([
+            "-drive",
+            &format!("file={},if=virtio,format=raw", seed.display()),
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn QEMU")?;
     cleanup.child = Some(child);
-    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(30));
+    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(30))?;
     cleanup.child = None;
-    result
+    if !result.stdout.contains("PM_MATRIX_GUEST_OK") {
+        bail!("guest probe did not report PM_MATRIX_GUEST_OK");
+    }
+    Ok(())
 }
 
 fn vm_unavailable(image: &CloudImage, missing: &[&str]) -> Result<()> {
@@ -688,11 +770,30 @@ fn vm_interrupt_test() -> Result<()> {
     Ok(())
 }
 
-fn run_child_timeout(child: &mut Child, timeout: Duration) -> Result<()> {
+fn run_child_timeout(child: &mut Child, timeout: Duration) -> Result<Output> {
     let start = Instant::now();
     loop {
-        if child.try_wait()?.is_some() {
-            return Ok(());
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    pipe.read_to_string(&mut stdout)?;
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    pipe.read_to_string(&mut stderr)?;
+                }
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            bail!("child exited with {status}");
+        }
+        if interrupted() {
+            terminate(child);
+            bail!("child interrupted");
         }
         if start.elapsed() >= timeout {
             terminate(child);
@@ -727,26 +828,47 @@ fn audit_cleanup() -> Result<()> {
         .args(["ps", "-a", "--format", "{{.Names}}"])
         .output()
         .context("inspect podman containers")?;
+    if !containers.status.success() {
+        bail!(
+            "podman cleanup inspection exited with {}: {}",
+            containers.status,
+            String::from_utf8_lossy(&containers.stderr).trim()
+        );
+    }
     let leftovers: Vec<_> = String::from_utf8_lossy(&containers.stdout)
         .lines()
         .filter(|line| line.starts_with("pm-matrix-"))
         .map(str::to_owned)
         .collect();
-    let qemu = Command::new("pgrep")
+    let qemu_status = Command::new("pgrep")
         .args(["-f", "qemu-system-x86_64.*pm-matrix"])
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    let temp_leftovers = fs::read_dir(std::env::temp_dir())
-        .map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .filter_map(|entry| entry.file_name().into_string().ok())
-                .filter(|name| name.starts_with("pm-matrix-") || name.contains("qcow2"))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let clean = leftovers.is_empty() && !qemu && temp_leftovers.is_empty();
+        .context("inspect qemu processes")?;
+    let qemu = match qemu_status.code() {
+        Some(1) => false,
+        Some(0) => true,
+        _ => bail!("pgrep qemu inspection exited with {qemu_status}"),
+    };
+    let temp_leftovers = fs::read_dir(std::env::temp_dir())?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|name| name.starts_with("pm-matrix-") || name.contains("qcow2"))
+        .collect::<Vec<_>>();
+    let networks = Command::new("podman")
+        .args(["network", "ls", "--format", "{{.Name}}"])
+        .output()
+        .context("inspect podman networks")?;
+    if !networks.status.success() {
+        bail!("podman network inspection exited with {}", networks.status);
+    }
+    let network_leftovers = String::from_utf8_lossy(&networks.stdout)
+        .lines()
+        .filter(|line| line.starts_with("pm-matrix-"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let clean =
+        leftovers.is_empty() && !qemu && temp_leftovers.is_empty() && network_leftovers.is_empty();
     println!(
         "{{\"status\":{},\"containers\":{},\"qemu\":{},\"temp\":{},\"cleanup\":{}}}",
         json_string(if clean { "pass" } else { "fail" }),
@@ -899,7 +1021,7 @@ impl Drop for CleanupGuard {
 
 fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
     match manager {
-        "apk" => Some(&["apk", "--print-arch"]),
+        "apk" => Some(&["apk", "--version"]),
         "apt" => Some(&["apt-get", "--version"]),
         "dnf5" => Some(&["dnf5", "--version"]),
         "dnf4" => Some(&["dnf", "--version"]),
@@ -1116,7 +1238,14 @@ mod tests {
                 .as_path(),
         )
         .unwrap();
-        assert!(images.len() >= 8);
+        assert_eq!(images.len(), 8);
+        let mut names = images
+            .iter()
+            .map(|image| image.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), images.len());
         for image in &images {
             validate_image(image).unwrap();
             assert!(probe_command(&image.manager).is_some(), "{}", image.name);
