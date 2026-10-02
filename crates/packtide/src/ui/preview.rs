@@ -66,30 +66,20 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         .as_str()
         .rsplit_once('/')
         .map_or(identity.key().as_str(), |(_, name)| name);
-    let helper = crate::app::package_helper().unwrap_or("paru");
-    let _program = match (kind, source) {
-        ("remove", Some(PackageSource::Flatpak)) => "flatpak",
-        ("remove", Some(PackageSource::Pacman | PackageSource::Aur))
-        | ("downgrade", Some(_))
-        | ("install", Some(_)) => helper,
-        _ => bail!(
+    if !matches!(
+        (kind, source),
+        (
+            "remove",
+            Some(PackageSource::Flatpak | PackageSource::Pacman | PackageSource::Aur)
+        ) | (
+            "downgrade",
+            Some(PackageSource::Pacman | PackageSource::Aur)
+        ) | ("install", Some(PackageSource::Pacman | PackageSource::Aur))
+    ) {
+        bail!(
             "{}",
             crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
-        ),
-    };
-    let mut operation = match (kind, source) {
-        ("remove", Some(PackageSource::Flatpak)) => vec!["info", package],
-        ("remove", Some(PackageSource::Pacman | PackageSource::Aur)) | ("downgrade", Some(_)) => {
-            vec!["-Qi", package]
-        }
-        ("install", Some(_)) => vec!["-Si", package],
-        _ => bail!(
-            "{}",
-            crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
-        ),
-    };
-    if source != Some(PackageSource::Flatpak) {
-        operation.insert(0, "--color=always");
+        );
     }
     let detail = BuiltinBackend::new(backend_id).read(ReadOperation::Details {
         package: PackageId::new(identity.key().as_str())?,
@@ -97,8 +87,8 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let metadata = detail
         .as_ref()
         .ok()
-        .and_then(|result| result.packages.first())
-        .and_then(|item| item.display_name.as_deref())
+        .and_then(|result| result.details.as_ref())
+        .map(|details| details.stdout.as_str())
         .unwrap_or_default();
     let source_key = match source {
         Some(PackageSource::Pacman) => "source.pacman",
