@@ -80,6 +80,7 @@ fn list_images(path: &Path) -> Result<()> {
     let images = read_lock(path)?;
     for image in images {
         validate_digest(&image.digest)?;
+        verify_manifest(&image)?;
         println!(
             "{{\"name\":{},\"registry\":{},\"tag\":{},\"manifest_digest\":{},\"architecture\":{},\"package_manager\":{},\"version\":{}}}",
             json_string(&image.name),
@@ -90,6 +91,38 @@ fn list_images(path: &Path) -> Result<()> {
             json_string(&image.manager),
             json_string(&image.version)
         );
+    }
+    Ok(())
+}
+
+fn verify_manifest(image: &Image) -> Result<()> {
+    let reference = format!("{}:{}", image.registry, image.tag);
+    let output = Command::new("podman")
+        .args(["manifest", "inspect", &reference])
+        .output()
+        .with_context(|| format!("inspect manifest {reference}"))?;
+    if !output.status.success() {
+        bail!(
+            "manifest inspect failed for {}: {}",
+            reference,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let body = String::from_utf8_lossy(&output.stdout);
+    if body.contains(&image.digest) {
+        return Ok(());
+    }
+    // Podman reports a single-image manifest without an index digest. Verify
+    // that case through the OCI registry inspector instead of trusting a tag.
+    let skopeo_ref = format!("docker://{reference}");
+    let inspected = Command::new("skopeo")
+        .args(["inspect", &skopeo_ref])
+        .output()
+        .with_context(|| format!("inspect single-image manifest {reference}"))?;
+    if !inspected.status.success()
+        || !String::from_utf8_lossy(&inspected.stdout).contains(&image.digest)
+    {
+        bail!("manifest inspect did not resolve locked digest {reference}");
     }
     Ok(())
 }
@@ -286,16 +319,35 @@ fn validate_digest(value: &str) -> Result<()> {
 }
 
 fn command_version(command: &str) -> Option<String> {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let output = Command::new(command).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut version = String::from_utf8_lossy(&output.stdout).into_owned();
+    if version.trim().is_empty() {
+        version = String::from_utf8_lossy(&output.stderr).into_owned();
+    }
+    Some(version.trim().to_string())
 }
 
 fn json_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => escaped.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 fn unix_nanos() -> u128 {
     SystemTime::now()
@@ -323,5 +375,10 @@ mod tests {
         let alpine = images.iter().find(|i| i.name == "alpine").unwrap();
         assert!(!alpine.registry.is_empty());
         assert!(!alpine.version.is_empty());
+    }
+    #[test]
+    fn json_string_escapes_control_characters() {
+        assert_eq!(json_string("line\nq\t\u{0001}"), "\"line\\nq\\t\\u0001\"");
+        assert!(!json_string("q\n").contains('\n'));
     }
 }
