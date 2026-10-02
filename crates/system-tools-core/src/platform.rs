@@ -29,8 +29,6 @@ impl fmt::Display for PlatformError {
 }
 impl std::error::Error for PlatformError {}
 
-/// Parse the freedesktop os-release format. Values may be unquoted or quoted;
-/// quoted backslash escapes are decoded without invoking a shell.
 pub fn parse_os_release(input: &str) -> Result<BTreeMap<String, String>, PlatformError> {
     let mut out = BTreeMap::new();
     for line in input.lines() {
@@ -41,6 +39,7 @@ pub fn parse_os_release(input: &str) -> Result<BTreeMap<String, String>, Platfor
         let Some((key, raw)) = line.split_once('=') else {
             return Err(PlatformError::MalformedOsRelease);
         };
+        let key = key.trim();
         if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return Err(PlatformError::MalformedOsRelease);
         }
@@ -51,55 +50,89 @@ pub fn parse_os_release(input: &str) -> Result<BTreeMap<String, String>, Platfor
 }
 
 fn parse_value(raw: &str) -> Result<String, PlatformError> {
-    if let Some(rest) = raw.strip_prefix('"') {
-        let mut value = String::new();
-        let mut escaped = false;
-        let mut end = None;
-        for (i, c) in rest.char_indices() {
-            if escaped {
-                value.push(match c {
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    other => other,
-                });
-                escaped = false;
-                continue;
-            }
-            match c {
-                '\\' => escaped = true,
-                '"' => {
-                    end = Some(i);
-                    break;
-                }
-                other => value.push(other),
-            }
-        }
-        let Some(end) = end else {
-            return Err(PlatformError::MalformedOsRelease);
-        };
-        if !rest[end + 1..].trim().is_empty() {
-            return Err(PlatformError::MalformedOsRelease);
-        }
-        if escaped {
-            return Err(PlatformError::MalformedOsRelease);
-        }
-        Ok(value)
-    } else {
-        if raw
-            .bytes()
-            .any(|b| b.is_ascii_whitespace() || b == b'"' || b == b'\'')
-        {
-            return Err(PlatformError::MalformedOsRelease);
-        }
-        Ok(raw.to_string())
+    if raw.is_empty() {
+        return Ok(String::new());
     }
+    match raw.as_bytes()[0] {
+        b'\'' => parse_single_quoted_value(raw),
+        b'"' => parse_double_quoted_value(raw),
+        _ => parse_unquoted_value(raw),
+    }
+}
+
+fn parse_single_quoted_value(raw: &str) -> Result<String, PlatformError> {
+    let rest = &raw[1..];
+    let Some(end) = rest.find('\'') else {
+        return Err(PlatformError::MalformedOsRelease);
+    };
+    if !rest[end + 1..].trim().is_empty() {
+        return Err(PlatformError::MalformedOsRelease);
+    }
+    Ok(rest[..end].to_owned())
+}
+
+fn parse_double_quoted_value(raw: &str) -> Result<String, PlatformError> {
+    let rest = &raw[1..];
+    let mut value = String::new();
+    let mut escaped = false;
+    let mut end = None;
+    for (index, c) in rest.char_indices() {
+        if escaped {
+            if matches!(c, '"' | '\\' | '$' | '`') {
+                value.push(c);
+            } else {
+                value.push('\\');
+                value.push(c);
+            }
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '"' => {
+                end = Some(index);
+                break;
+            }
+            other => value.push(other),
+        }
+    }
+    let Some(end) = end else {
+        return Err(PlatformError::MalformedOsRelease);
+    };
+    if escaped || !rest[end + 1..].trim().is_empty() {
+        return Err(PlatformError::MalformedOsRelease);
+    }
+    Ok(value)
+}
+
+fn parse_unquoted_value(raw: &str) -> Result<String, PlatformError> {
+    let mut value = String::new();
+    let mut escaped = false;
+    for c in raw.chars() {
+        if escaped {
+            value.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if c.is_ascii_whitespace() || matches!(c, '\'' | '"' | '$' | '`' | ';') {
+            return Err(PlatformError::MalformedOsRelease);
+        }
+        value.push(c);
+    }
+    if escaped {
+        return Err(PlatformError::MalformedOsRelease);
+    }
+    Ok(value)
 }
 
 fn backend_for_id(id: &str) -> Option<NativeBackend> {
     match id.to_ascii_lowercase().as_str() {
         "arch" | "manjaro" | "endeavouros" | "endeavour" => Some(NativeBackend::Pacman),
-        "debian" | "ubuntu" | "linuxmint" | "pop" | "pop_os" | "elementary" => {
+        "debian" | "ubuntu" | "linuxmint" | "mint" | "pop" | "pop_os" | "elementary" => {
             Some(NativeBackend::Apt)
         }
         "fedora" | "rhel" | "redhat" | "centos" | "rocky" | "almalinux" | "alma" | "ol" => {
@@ -186,23 +219,29 @@ pub fn detect_native_backend_from_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
     fn f(id: &str) -> String {
-        format!("ID={id}\nNAME=\"A \\\"name\\\"\"\n")
+        format!("ID='{id}'\nNAME='A \\\"name\\\"'\n")
     }
+
     #[test]
-    fn maps_table() {
+    fn maps_supported_distribution_ids() {
         for (id, expected) in [
             ("arch", NativeBackend::Pacman),
             ("manjaro", NativeBackend::Pacman),
+            ("endeavouros", NativeBackend::Pacman),
             ("debian", NativeBackend::Apt),
             ("ubuntu", NativeBackend::Apt),
             ("linuxmint", NativeBackend::Apt),
+            ("mint", NativeBackend::Apt),
             ("pop", NativeBackend::Apt),
             ("fedora", NativeBackend::Dnf),
             ("rhel", NativeBackend::Dnf),
             ("rocky", NativeBackend::Dnf),
-            ("alma", NativeBackend::Dnf),
+            ("almalinux", NativeBackend::Dnf),
             ("opensuse", NativeBackend::Zypper),
+            ("opensuse-leap", NativeBackend::Zypper),
             ("sles", NativeBackend::Zypper),
             ("alpine", NativeBackend::Apk),
             ("void", NativeBackend::Xbps),
@@ -213,30 +252,63 @@ mod tests {
     #[test]
     fn id_precedes_like_and_like_ordered() {
         assert_eq!(
-            backend_from_os_release("ID=ubuntu\nID_LIKE=\"fedora debian\"\n"),
+            backend_from_os_release("ID='ubuntu'\nID_LIKE=\"fedora debian\"\n"),
             Ok(NativeBackend::Apt)
         );
         assert_eq!(
-            backend_from_os_release("ID=unknown\nID_LIKE=\"fedora debian\"\n"),
+            backend_from_os_release("ID=unknown\nID_LIKE='fedora debian'\n"),
             Ok(NativeBackend::Dnf)
         );
     }
+
     #[test]
-    fn quoted_escapes() {
-        let p = parse_os_release("NAME=\"A \\\"quoted\\\"\\nline\"\n").unwrap();
-        assert_eq!(p["NAME"], "A \"quoted\"\nline");
+    fn parses_single_double_and_unquoted_escapes() {
+        let p = parse_os_release(
+            r#"SINGLE='A \"quoted\"'
+DOUBLE="A \"quoted\"\nline"
+ESCAPED="dollar\$ tick\` slash\\ unknown\q"
+ID_LIKE=fedora\ debian
+"#,
+        )
+        .unwrap();
+        assert_eq!(p["SINGLE"], r#"A \"quoted\""#);
+        assert_eq!(p["DOUBLE"], "A \"quoted\"\\nline");
+        assert_eq!(p["ESCAPED"], r#"dollar$ tick` slash\ unknown\q"#);
+        assert_eq!(p["ID_LIKE"], "fedora debian");
     }
+
     #[test]
-    fn malformed_and_unknown() {
+    fn malformed_values_and_unknown_ids_are_rejected() {
         assert_eq!(
             backend_from_os_release("ID=wat\n"),
             Err(PlatformError::UnsupportedDistribution)
         );
         assert!(parse_os_release("ID=\"unterminated\n").is_err());
+        assert!(parse_os_release("ID='unterminated\n").is_err());
+        assert!(parse_os_release("ID=\"one\" \"two\"\n").is_err());
+        assert!(parse_os_release("ID=foo$bar\n").is_err());
     }
+
     #[test]
     fn path_does_not_change_family() {
         let err = detect_native_backend("ID=ubuntu\n", |_| true);
         assert_eq!(err, Ok(NativeBackend::Apt));
+    }
+
+    #[test]
+    fn required_tools_follow_id_instead_of_path_decoys() {
+        let requested = RefCell::new(Vec::new());
+        let detected = detect_native_backend("ID='ubuntu'\nID_LIKE='fedora'\n", |command| {
+            requested
+                .borrow_mut()
+                .push(command.to_string_lossy().into_owned());
+            matches!(command.to_str(), Some("apt-get" | "dpkg-query"))
+        });
+        assert_eq!(detected, Ok(NativeBackend::Apt));
+        assert_eq!(requested.into_inner(), ["apt-get", "dpkg-query"]);
+
+        let missing_apt =
+            detect_native_backend("ID=ubuntu\n", |command| command == OsStr::new("dnf"));
+        assert_eq!(missing_apt, Err(PlatformError::MissingTool));
     }
 }
