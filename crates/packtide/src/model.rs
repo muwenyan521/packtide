@@ -81,11 +81,7 @@ pub(crate) fn render_update_rows(updates: &[PackageUpdate]) -> String {
             rows.push('\n');
         }
         let color = crate::ui::source_color(item.source);
-        let source_label = match item.source {
-            UpdateSource::Pacman => "Pacman",
-            UpdateSource::Aur => "AUR",
-            UpdateSource::Flatpak => "Flatpak",
-        };
+        let source_label = crate::locale::source_label(crate::locale::current(), item.source);
         write!(
             rows,
             "\x1b[{color}m[{:<7}]\x1b[0m\t{}\t{}",
@@ -102,7 +98,7 @@ mod tests {
     use system_tools_core::PackageSource;
 
     #[test]
-    fn update_rows_use_stable_title_case_source_labels() {
+    fn update_rows_use_localized_source_labels() {
         let rows = render_update_rows(&[
             PackageUpdate {
                 source: PackageSource::Pacman,
@@ -124,8 +120,14 @@ mod tests {
             },
         ]);
         let plain = crate::ui::strip_ansi(&rows);
-        assert!(plain.contains("[Pacman "));
-        assert!(plain.contains("[AUR    "));
-        assert!(plain.contains("[Flatpak]"));
+        let lang = crate::locale::current();
+        for source in [
+            PackageSource::Pacman,
+            PackageSource::Aur,
+            PackageSource::Flatpak,
+        ] {
+            let label = crate::locale::source_label(lang, source);
+            assert!(plain.contains(&format!("[{label}")), "missing {label}");
+        }
     }
 }

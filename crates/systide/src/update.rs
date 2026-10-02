@@ -16,7 +16,7 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
         }
         let mut args = vec!["pacman", "-Sy", "--needed", "--noconfirm"];
         args.extend(keyrings);
-        print_summary("keyring", "pacman", "sudo", &args[3..]);
+        print_summary("keyring", "pacman", "sudo", &args[3..], lang);
         if run_privileged(&args).is_ok() {
             log_success(lang, msg(lang, "keyring_ok"));
         } else {
@@ -29,9 +29,10 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
         PackageUpgradePrivilege::Elevated => "sudo",
         PackageUpgradePrivilege::User => "helper-managed",
     };
-    print_summary("upgrade", command.program, privilege, command.args);
+    print_summary("upgrade", command.program, privilege, command.args, lang);
     let result = run_package_upgrade(manager);
     if result.is_err() {
+        log_error(lang, msg(lang, "backend.partial"));
         log_error(lang, msg(lang, "partial_title"));
         log_error(lang, msg(lang, "partial_database"));
         log_error(lang, msg(lang, "partial_stop"));
@@ -42,8 +43,14 @@ pub(crate) fn run(manager: &str, lang: Lang) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str]) {
-    println!("{}", summary_line(action, helper, privilege, targets));
+fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str], lang: Lang) {
+    println!(
+        "{} backend={} · {} scope={}",
+        summary_line(action, helper, privilege, targets),
+        msg(lang, "backend.pacman"),
+        msg(lang, "backend.native"),
+        msg(lang, "scope.system")
+    );
 }
 
 fn summary_line(action: &str, helper: &str, privilege: &str, targets: &[&str]) -> String {

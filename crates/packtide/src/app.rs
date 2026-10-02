@@ -22,10 +22,35 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
     } else if resolver.resolve(OsStr::new("yay")).is_some() {
         Ok("yay")
     } else {
+        let lang = crate::locale::current();
+        let capability_key = match capability {
+            "package details" | "downgrade package details" => "capability.details",
+            "package installation" => "capability.install",
+            "package removal" => "capability.remove",
+            _ => "capability.catalog",
+        };
         anyhow::bail!(
-            "required AUR helper ('paru' or 'yay') is unavailable for {capability}; install paru or yay and retry"
+            "{} ({}): required AUR helper ('paru' or 'yay') is unavailable for {capability}; install paru or yay and retry",
+            crate::locale::text(lang, "backend.missing_tool", &[]),
+            crate::locale::text(lang, capability_key, &[]),
         )
     }
+}
+
+pub(crate) fn require_command_for(
+    command: &str,
+    capability_key: &str,
+    capability: &str,
+    optional: bool,
+) -> Result<std::path::PathBuf> {
+    let lang = crate::locale::current();
+    system_tools_core::resolve_command_for(command, capability, optional).map_err(|error| {
+        anyhow::anyhow!(
+            "{} ({}): {error}",
+            crate::locale::text(lang, "backend.missing_tool", &[]),
+            crate::locale::text(lang, capability_key, &[]),
+        )
+    })
 }
 
 pub(crate) fn run() -> Result<()> {

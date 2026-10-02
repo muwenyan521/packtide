@@ -4,7 +4,10 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use system_tools_core::{command_exists, run_capture, run_privileged, run_status_no_args};
+use system_tools_core::{
+    NativeBackend, command_exists, detect_native_backend_from_file, run_capture, run_privileged,
+    run_status_no_args,
+};
 
 use crate::messages::{Lang, log_info, msg, msg_with};
 
@@ -78,10 +81,8 @@ fn parse_date_timestamp(value: &str) -> Result<u64> {
 }
 
 fn is_arch() -> bool {
-    fs::read_to_string("/etc/os-release")
-        .map(|v| {
-            v.lines()
-                .any(|line| line == "ID=arch" || line == "ID_LIKE=arch")
-        })
-        .unwrap_or(false)
+    matches!(
+        detect_native_backend_from_file("/etc/os-release"),
+        Ok(NativeBackend::Pacman)
+    )
 }

@@ -127,10 +127,13 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
     } else {
         String::new()
     };
-    let source = record
-        .repository
-        .as_deref()
-        .unwrap_or(record.source.as_str());
+    let localized_source;
+    let source = if let Some(repository) = record.repository.as_deref() {
+        repository
+    } else {
+        localized_source = crate::locale::source_label(crate::locale::current(), record.source);
+        localized_source.as_str()
+    };
     let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source));
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
     if mode == PackageListMode::Install {
@@ -177,7 +180,18 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     if name.is_empty() {
         return None;
     }
-    let (source, repository) = match PackageSource::parse(source_label) {
+    let (source, repository) = match PackageSource::parse(source_label).or_else(|| {
+        [
+            PackageSource::Pacman,
+            PackageSource::Aur,
+            PackageSource::Flatpak,
+        ]
+        .into_iter()
+        .find(|source| {
+            crate::locale::source_label(crate::locale::Lang::En, *source) == source_label
+                || crate::locale::source_label(crate::locale::Lang::Zh, *source) == source_label
+        })
+    }) {
         Some(source) => (source, None),
         None if crate::sources::valid_package_name(source_label) => {
             (PackageSource::Pacman, Some(source_label.to_owned()))
