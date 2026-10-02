@@ -184,7 +184,7 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     if name.is_empty() {
         return None;
     }
-    let (source_label, _scope) = source_label
+    let (source_label, scope) = source_label
         .split_once('@')
         .unwrap_or((source_label, "user"));
     let (source, repository) = match PackageSource::parse(source_label).or_else(|| {
@@ -199,8 +199,15 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
                 || crate::locale::source_label(crate::locale::Lang::Zh, *source) == source_label
         })
     }) {
-        Some(source) => (source, None),
-        None if source_label == "flatpak" => (PackageSource::Flatpak, None),
+        Some(source) => (
+            source,
+            (source == PackageSource::Flatpak && scope == "system")
+                .then(|| "flatpak@system".to_owned()),
+        ),
+        None if source_label == "flatpak" => (
+            PackageSource::Flatpak,
+            (scope == "system").then(|| "flatpak@system".to_owned()),
+        ),
         None if crate::sources::valid_package_name(source_label) => {
             (PackageSource::Pacman, Some(source_label.to_owned()))
         }

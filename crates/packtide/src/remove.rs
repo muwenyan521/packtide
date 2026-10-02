@@ -26,7 +26,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         false,
     )?;
     let helper = crate::app::package_helper_for("package removal")?;
-    let records = rows(&pacman)?;
+    let records = rows(&pacman, helper)?;
     let rows = render_package_rows(&records, PackageListMode::Remove);
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
@@ -59,14 +59,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
             continue;
         };
         let (backend, kind) = match package.source {
-            PackageSource::Pacman => (
-                if helper == "yay" {
-                    BackendId::Yay
-                } else {
-                    BackendId::Paru
-                },
-                PackageKind::Aur,
-            ),
+            PackageSource::Pacman => (BackendId::Pacman, PackageKind::System),
             PackageSource::Aur => (
                 if helper == "yay" {
                     BackendId::Yay
@@ -102,13 +95,31 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
+fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::PackageRecord>> {
     let typed_installed = BuiltinBackend::new(BackendId::Pacman)
         .read(ReadOperation::Installed)
         .map_err(|error| anyhow::anyhow!("pacman typed installed read failed: {error}"))?;
+    let foreign = if helper == "yay" {
+        BackendId::Yay
+    } else {
+        BackendId::Paru
+    };
+    let foreign_installed = if command_exists(foreign.as_str()) {
+        BuiltinBackend::new(foreign)
+            .read(ReadOperation::Installed)
+            .map(|result| result.packages)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let foreign_names = foreign_installed
+        .iter()
+        .map(|package| package.native_key.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut records = typed_installed
         .packages
         .into_iter()
+        .filter(|package| !foreign_names.contains(package.native_key.as_str()))
         .map(|package| PackageRecord {
             source: PackageSource::Pacman,
             repository: None,
@@ -117,6 +128,13 @@ fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
             installed: true,
         })
         .collect::<Vec<_>>();
+    records.extend(foreign_installed.into_iter().map(|package| PackageRecord {
+        source: PackageSource::Aur,
+        repository: Some("aur".to_owned()),
+        name: package.native_key.as_str().to_owned(),
+        listing: PackageListing::Version(String::new()),
+        installed: true,
+    }));
     if command_exists("flatpak") {
         let typed_flatpak = BuiltinBackend::new(BackendId::Flatpak)
             .read(ReadOperation::Installed)

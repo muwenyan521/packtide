@@ -783,7 +783,7 @@ impl PackageBackend for BuiltinBackend {
             return Err(BackendError::QueryRequired { backend: self.id() });
         }
 
-        let (packages, source) = match self.0 {
+        let (packages, source, details) = match self.0 {
             BackendId::Pacman => read_pacman(operation.clone(), self.id())?,
             BackendId::Paru | BackendId::Yay => read_aur(operation.clone(), self.id())?,
             BackendId::Flatpak => read_flatpak(operation.clone(), self.id())?,
@@ -802,7 +802,7 @@ impl PackageBackend for BuiltinBackend {
             operation,
             packages,
             source,
-            details: None,
+            details,
         })
     }
 }
@@ -810,7 +810,7 @@ impl PackageBackend for BuiltinBackend {
 fn read_pacman(
     operation: ReadOperation,
     backend: BackendId,
-) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     match operation {
         ReadOperation::Catalog | ReadOperation::Search { .. } => {
             let output =
@@ -832,7 +832,7 @@ fn read_pacman(
                         .is_none_or(|query| identity.native_key.as_str().contains(query))
                 })
                 .collect();
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Installed => {
             let output =
@@ -845,7 +845,7 @@ fn read_pacman(
                 .lines()
                 .filter_map(parse_pacman_installed_identity)
                 .collect();
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Details { package } => {
             let key = package.as_str();
@@ -860,16 +860,18 @@ fn read_pacman(
                 return Err(command_failed(backend, "read package details", &output));
             }
             Ok((
-                vec![
-                    identity_for(
-                        backend,
-                        PackageKind::System,
-                        PackageScope::System,
-                        key.to_owned(),
-                    )?
-                    .with_display_name(output.stdout),
-                ],
+                vec![identity_for(
+                    backend,
+                    PackageKind::System,
+                    PackageScope::System,
+                    key.to_owned(),
+                )?],
                 CatalogStrategy::Enumerated,
+                Some(ReadDetails {
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    success: output.status.success(),
+                }),
             ))
         }
         ReadOperation::Updates => {
@@ -897,7 +899,7 @@ fn read_pacman(
                 .filter_map(parse_update_identity)
                 .map(|name| identity_for(backend, PackageKind::System, PackageScope::System, name))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
 }
@@ -905,7 +907,7 @@ fn read_pacman(
 fn read_aur(
     operation: ReadOperation,
     backend: BackendId,
-) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     let helper = backend.as_str();
     match operation {
         ReadOperation::Catalog | ReadOperation::Search { .. } => {
@@ -928,7 +930,7 @@ fn read_aur(
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Installed => {
             let output = run_backend_command_for(
@@ -958,7 +960,7 @@ fn read_aur(
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Details { package } => {
             let qi = package.as_str().strip_prefix("detail-qi:").is_some();
@@ -977,16 +979,18 @@ fn read_aur(
                 return Err(command_failed(backend, "read AUR package details", &output));
             }
             Ok((
-                vec![
-                    identity_for(
-                        backend,
-                        PackageKind::Aur,
-                        PackageScope::User,
-                        package.to_owned(),
-                    )?
-                    .with_display_name(output.stdout),
-                ],
+                vec![identity_for(
+                    backend,
+                    PackageKind::Aur,
+                    PackageScope::User,
+                    package.to_owned(),
+                )?],
                 CatalogStrategy::Enumerated,
+                Some(ReadDetails {
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    success: output.status.success(),
+                }),
             ))
         }
         ReadOperation::Updates => {
@@ -1000,7 +1004,7 @@ fn read_aur(
                 .filter_map(parse_update_identity)
                 .map(|name| identity_for(backend, PackageKind::Aur, PackageScope::User, name))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
 }
@@ -1008,7 +1012,7 @@ fn read_aur(
 fn read_flatpak(
     operation: ReadOperation,
     backend: BackendId,
-) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     match operation {
         ReadOperation::Catalog | ReadOperation::Installed | ReadOperation::Search { .. } => {
             let output = run_backend_command(
@@ -1041,7 +1045,7 @@ fn read_flatpak(
                 })
                 .filter_map(parse_flatpak_identity)
                 .collect();
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Details { package } => {
             let key = package.as_str().to_owned();
@@ -1055,11 +1059,18 @@ fn read_flatpak(
                 ));
             }
             Ok((
-                vec![
-                    identity_for(backend, PackageKind::Flatpak, PackageScope::User, key)?
-                        .with_display_name(output.stdout),
-                ],
+                vec![identity_for(
+                    backend,
+                    PackageKind::Flatpak,
+                    PackageScope::User,
+                    key,
+                )?],
                 CatalogStrategy::Enumerated,
+                Some(ReadDetails {
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    success: output.status.success(),
+                }),
             ))
         }
         ReadOperation::Updates => {
@@ -1085,7 +1096,7 @@ fn read_flatpak(
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((packages, CatalogStrategy::Enumerated))
+            Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
 }
