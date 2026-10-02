@@ -163,6 +163,8 @@ pub struct PackageIdentity {
     pub kind: PackageKind,
     pub scope: PackageScope,
     pub native_key: NativePackageKey,
+    pub origin: Option<String>,
+    pub display_name: Option<String>,
 }
 
 impl PackageIdentity {
@@ -177,7 +179,19 @@ impl PackageIdentity {
             kind,
             scope,
             native_key: native_key.into(),
+            origin: None,
+            display_name: None,
         }
+    }
+
+    pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
+        self.origin = Some(origin.into());
+        self
+    }
+
+    pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = Some(name.into());
+        self
     }
 
     pub fn key(&self) -> &NativePackageKey {
@@ -900,12 +914,16 @@ fn read_aur(
             Ok((packages, CatalogStrategy::Enumerated))
         }
         ReadOperation::Installed => {
-            let output =
-                run_backend_command_for(backend, helper, "list installed AUR packages", &["-Qq"])?;
+            let output = run_backend_command_for(
+                backend,
+                "pacman",
+                "list foreign installed packages",
+                &["--color=never", "-Qm"],
+            )?;
             if !output.status.success() {
                 return Err(command_failed(
                     backend,
-                    "list installed AUR packages",
+                    "list foreign installed packages",
                     &output,
                 ));
             }
@@ -974,7 +992,11 @@ fn read_flatpak(
             let output = run_backend_command(
                 backend,
                 "list Flatpak applications",
-                &["list", "--app", "--columns=application,origin,name"],
+                &[
+                    "list",
+                    "--app",
+                    "--columns=application,origin,name,installation",
+                ],
             )?;
             if !output.status.success() {
                 return Err(command_failed(
@@ -1140,17 +1162,29 @@ fn parse_pacman_installed_identity(line: &str) -> Option<PackageIdentity> {
 }
 
 fn parse_flatpak_identity(line: &str) -> Option<PackageIdentity> {
-    let id = line.split('\t').next()?.trim();
+    let mut fields = line.split('\t');
+    let id = fields.next()?.trim();
+    let origin = fields.next()?.trim();
+    let name = fields.next()?.trim();
+    let installation = fields.next().unwrap_or("user").trim();
     if !valid_package_token(id) {
         return None;
     }
-    identity_for(
-        BackendId::Flatpak,
-        PackageKind::Flatpak,
-        PackageScope::User,
-        id.to_owned(),
+    let scope = match installation {
+        "system" => PackageScope::System,
+        _ => PackageScope::User,
+    };
+    Some(
+        identity_for(
+            BackendId::Flatpak,
+            PackageKind::Flatpak,
+            scope,
+            id.to_owned(),
+        )
+        .ok()?
+        .with_origin(origin)
+        .with_display_name(name),
     )
-    .ok()
 }
 
 fn parse_update_identity(line: &str) -> Option<String> {
@@ -1543,6 +1577,12 @@ mod tests {
         let flatpak = super::parse_flatpak_identity("org.example.App\tflathub\tDemo").unwrap();
         assert_eq!(flatpak.native_key.as_str(), "org.example.App");
         assert_eq!(flatpak.scope, PackageScope::User);
+        assert_eq!(flatpak.origin.as_deref(), Some("flathub"));
+        assert_eq!(flatpak.display_name.as_deref(), Some("Demo"));
+        let system =
+            super::parse_flatpak_identity("org.example.System\tflathub\tSystem Demo\tsystem")
+                .unwrap();
+        assert_eq!(system.scope, PackageScope::System);
         assert_eq!(super::parse_flatpak_identity("\tflathub\tmissing"), None);
     }
 

@@ -3,11 +3,10 @@ mod flatpak;
 mod pacman;
 
 use crate::model::PackageRecord;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Instant;
 use system_tools_core::{BackendId, BuiltinBackend, PackageBackend, ReadOperation};
 
@@ -26,7 +25,7 @@ pub(crate) fn install_rows(pacman: &Path, refresh: bool) -> Result<InstallCatalo
 }
 
 pub(crate) fn install_rows_streaming(
-    pacman: &Path,
+    _pacman: &Path,
     refresh: bool,
     retain_official: bool,
     mut write_official: impl FnMut(&PackageRecord) -> Result<()>,
@@ -35,49 +34,20 @@ pub(crate) fn install_rows_streaming(
     let typed_catalog = BuiltinBackend::new(BackendId::Pacman)
         .read(ReadOperation::Catalog)
         .map_err(|error| anyhow::anyhow!("pacman catalog exited: typed read failed: {error}"))?;
-    let typed_official = typed_catalog
-        .packages
-        .iter()
-        .map(|package| package.native_key.as_str().to_owned())
-        .collect::<HashSet<_>>();
-    let installed_child = Command::new(pacman)
+    let installed = Command::new(_pacman)
         .args(["-Qq"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to execute {} -Qq", pacman.display()))?;
-    let mut catalog_child = match Command::new(pacman)
-        .args(["--color=never", "-Sl"])
-        .stdout(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = installed_child.wait_with_output();
-            return Err(error).context(format!("failed to execute {} -Sl", pacman.display()));
-        }
-    };
-    let installed = match installed_child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            let _ = catalog_child.wait();
-            return Err(error).context("failed waiting for pacman installed package query");
-        }
-    };
+        .output()
+        .map_err(|error| anyhow::anyhow!("failed to execute pacman -Qq: {error}"))?;
     if !installed.status.success() {
-        let _ = catalog_child.wait();
         anyhow::bail!(
             "pacman installed package query exited with {}",
             installed.status
         );
     }
-    let installed = match String::from_utf8(installed.stdout) {
-        Ok(output) => output,
-        Err(error) => {
-            let _ = catalog_child.wait();
-            return Err(error).context("pacman installed package query returned invalid UTF-8");
-        }
-    };
-    let installed = installed
+    let installed = String::from_utf8(installed.stdout)
+        .map_err(|error| {
+            anyhow::anyhow!("pacman installed package query returned invalid UTF-8: {error}")
+        })?
         .lines()
         .filter(|name| valid_package_name(name))
         .map(str::to_owned)
@@ -88,33 +58,22 @@ pub(crate) fn install_rows_streaming(
         aur_names: String::new(),
         installed,
     };
-    let stdout = catalog_child
-        .stdout
-        .take()
-        .context("cannot open pacman catalog output")?;
-    for line in BufReader::new(stdout).lines() {
-        let line = line?;
-        let Some(record) = pacman::parse_install_line(&line, &catalog.installed) else {
+    for package in typed_catalog.packages {
+        let Some((repository, name)) = package.native_key.as_str().split_once('/') else {
             continue;
         };
-        if !typed_official.contains(
-            &record
-                .repository
-                .as_deref()
-                .map(|repository| format!("{repository}/{}", record.name))
-                .unwrap_or_else(|| record.name.clone()),
-        ) {
-            continue;
-        }
+        let record = PackageRecord {
+            source: system_tools_core::PackageSource::Pacman,
+            repository: Some(repository.to_owned()),
+            name: name.to_owned(),
+            listing: crate::model::PackageListing::Version("-".to_owned()),
+            installed: catalog.installed.contains(name),
+        };
         write_official(&record)?;
         catalog.official_names.insert(record.name.clone());
         if retain_official {
             catalog.official.push(record);
         }
-    }
-    let status = catalog_child.wait()?;
-    if !status.success() {
-        anyhow::bail!("pacman catalog exited with {status}");
     }
     catalog.aur_names = aur::fetch_names_for_picker(refresh, false)?;
     if !catalog.aur_names.trim().is_empty() {
@@ -147,6 +106,7 @@ pub(crate) fn install_rows_streaming(
     Ok(catalog)
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_remove_rows(
     installed: &str,
     sync: &str,
@@ -157,6 +117,7 @@ pub(crate) fn parse_remove_rows(
     rows
 }
 
+#[allow(dead_code)]
 pub(crate) fn flatpak_rows() -> String {
     let started = Instant::now();
     if !system_tools_core::command_exists("flatpak") {
