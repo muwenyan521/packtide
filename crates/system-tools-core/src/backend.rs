@@ -182,11 +182,15 @@ impl PackageBackend for BuiltinBackend {
         }
     }
     fn capabilities(&self) -> CapabilitySet {
-        CapabilitySet::CATALOG
+        let base = CapabilitySet::CATALOG
             .union(CapabilitySet::INSTALL)
             .union(CapabilitySet::REMOVE)
-            .union(CapabilitySet::UPGRADE)
-            .union(CapabilitySet::DOWNGRADE)
+            .union(CapabilitySet::UPGRADE);
+        if self.0 == BackendId::Flatpak {
+            base
+        } else {
+            base.union(CapabilitySet::DOWNGRADE)
+        }
     }
     fn catalog_strategy(&self) -> CatalogStrategy {
         match self.0 {
@@ -213,11 +217,20 @@ impl PackageBackend for BuiltinBackend {
         };
         let mut command =
             CommandPlan::new(PathBuf::from(self.id().as_str())).with_backend(self.id());
-        let flag = match action {
-            crate::TransactionAction::Install => "-S",
-            crate::TransactionAction::Remove => "-R",
-            crate::TransactionAction::Upgrade => "-Su",
-            crate::TransactionAction::Downgrade => "-U",
+        let flag = match (self.0, action) {
+            (BackendId::Flatpak, crate::TransactionAction::Install) => "install",
+            (BackendId::Flatpak, crate::TransactionAction::Remove) => "uninstall",
+            (BackendId::Flatpak, crate::TransactionAction::Upgrade) => "update",
+            (BackendId::Flatpak, crate::TransactionAction::Downgrade) => {
+                return Err(BackendError::UnsupportedCapability {
+                    backend: self.id(),
+                    capability: CapabilitySet::DOWNGRADE,
+                });
+            }
+            (_, crate::TransactionAction::Install) => "-S",
+            (_, crate::TransactionAction::Remove) => "-Rns",
+            (_, crate::TransactionAction::Upgrade) => "-Su",
+            (_, crate::TransactionAction::Downgrade) => "-U",
         };
         command.args.push(OsString::from(flag));
         for p in &packages {
@@ -229,5 +242,37 @@ impl PackageBackend for BuiltinBackend {
             command,
             packages,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BackendId, BuiltinBackend, PackageBackend, PackageId, Scope};
+    use crate::TransactionAction;
+
+    fn ids(values: &[&str]) -> Vec<PackageId> {
+        values
+            .iter()
+            .map(|value| PackageId::new(*value).expect("valid package id"))
+            .collect()
+    }
+
+    #[test]
+    fn arch_backends_keep_typed_transaction_argv_and_scope() {
+        let plan = BuiltinBackend::new(BackendId::Paru)
+            .transaction(TransactionAction::Remove, ids(&["aur/tool"]))
+            .expect("paru remove plan");
+        assert_eq!(plan.scope, Scope::User);
+        assert_eq!(plan.command.program.to_string_lossy(), "paru");
+        assert_eq!(plan.command.args, ["-Rns", "aur/tool"]);
+    }
+
+    #[test]
+    fn flatpak_uses_application_ids_without_display_labels() {
+        let plan = BuiltinBackend::new(BackendId::Flatpak)
+            .transaction(TransactionAction::Remove, ids(&["org.example.App"]))
+            .expect("flatpak uninstall plan");
+        assert_eq!(plan.scope, Scope::User);
+        assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
     }
 }

@@ -1,37 +1,44 @@
 use anyhow::Result;
 use std::io::IsTerminal;
 use std::process::Command;
-use system_tools_core::{TransactionAction, command_exists, run_status};
+use system_tools_core::{
+    BackendId, BuiltinBackend, PackageBackend, PackageId, TransactionAction, command_exists,
+    run_status_path,
+};
 
 pub(crate) fn execute_package(
     helper: &str,
     action: TransactionAction,
     packages: &[String],
 ) -> Result<()> {
-    let operation = match action {
-        TransactionAction::Install => "-S",
-        TransactionAction::Remove => "-Rns",
-        TransactionAction::Upgrade | TransactionAction::Downgrade => {
-            anyhow::bail!("unsupported package transaction action: {action:?}")
-        }
+    let backend = match helper {
+        "paru" => BackendId::Paru,
+        "yay" => BackendId::Yay,
+        _ => anyhow::bail!("unsupported AUR helper: {helper}"),
     };
-    let mut args = vec![operation];
-    args.extend(packages.iter().map(String::as_str));
+    let package_ids = packages
+        .iter()
+        .cloned()
+        .map(PackageId::new)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let plan = BuiltinBackend::new(backend).transaction(action, package_ids)?;
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary(action.as_str(), helper, "helper-managed", &targets);
-    run_status(helper, &args)?;
+    run_status_path(&plan.command.program, &plan.command.args)?;
     Ok(())
 }
 
 pub(crate) fn execute_flatpak(packages: &[String]) -> Result<()> {
+    let package_ids = packages
+        .iter()
+        .cloned()
+        .map(PackageId::new)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let plan = BuiltinBackend::new(BackendId::Flatpak)
+        .transaction(TransactionAction::Remove, package_ids)?;
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary("remove", "flatpak", "direct", &targets);
-    run_status(
-        "flatpak",
-        &std::iter::once("uninstall")
-            .chain(targets.iter().copied())
-            .collect::<Vec<_>>(),
-    )?;
+    run_status_path(&plan.command.program, &plan.command.args)?;
     Ok(())
 }
 
