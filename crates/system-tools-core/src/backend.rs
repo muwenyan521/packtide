@@ -505,6 +505,13 @@ pub trait PackageBackend {
     }
 
     fn command_for(&self, operation: &WriteOperation) -> Result<CommandPlan, BackendError> {
+        let capability = operation.capability();
+        if !self.capabilities().contains(capability) {
+            return Err(BackendError::UnsupportedCapability {
+                backend: self.id(),
+                capability,
+            });
+        }
         if let Some(package) = operation.packages().iter().find(|package| {
             package.backend != self.id()
                 || package.kind != self.kind()
@@ -757,21 +764,26 @@ mod tests {
     }
 
     #[test]
-    fn flatpak_uses_application_ids_without_display_labels() {
-        let display_label = "Example App (flathub)";
-        let application_id = "org.example.App";
-        let plan = BuiltinBackend::new(BackendId::Flatpak)
-            .transaction(TransactionAction::Remove, ids(&[application_id]))
-            .expect("flatpak uninstall plan");
-        assert_eq!(plan.scope, PackageScope::User);
-        assert_eq!(plan.command.args, ["uninstall", application_id]);
-        assert!(
-            !plan
-                .command
-                .args
-                .contains(&std::ffi::OsString::from(display_label))
+    fn flatpak_identity_drives_application_id_argv() {
+        const APPLICATION_ID: &str = "org.example.App";
+        let backend = BuiltinBackend::new(BackendId::Flatpak);
+        let identity = backend.identity(NativePackageKey::new(APPLICATION_ID).unwrap());
+        let expected_identity = PackageIdentity::new(
+            BackendId::Flatpak,
+            PackageKind::Flatpak,
+            PackageScope::User,
+            NativePackageKey::new(APPLICATION_ID).unwrap(),
         );
-        assert_eq!(plan.packages[0].native_key.as_str(), application_id);
+        assert_eq!(identity, expected_identity);
+
+        let plan = backend
+            .write(WriteOperation::Remove {
+                packages: vec![identity],
+            })
+            .expect("flatpak uninstall plan");
+        assert_eq!(plan.command.program, std::path::PathBuf::from("flatpak"));
+        assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
+        assert_eq!(plan.packages, vec![expected_identity]);
     }
 
     #[test]
@@ -816,6 +828,22 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_write_is_rejected_before_command_spawn() {
+        let backend = BuiltinBackend::new(BackendId::Apt);
+        let operation = WriteOperation::Install {
+            packages: vec![backend.identity(NativePackageKey::new("same-name").unwrap())],
+        };
+
+        assert_eq!(
+            backend.write(operation),
+            Err(BackendError::UnsupportedCapability {
+                backend: BackendId::Apt,
+                capability: CapabilitySet::INSTALL,
+            })
+        );
+    }
+
+    #[test]
     fn dispatch_keeps_read_and_write_response_types_separate() {
         let backend = BuiltinBackend::new(BackendId::Pacman);
         let read = backend
@@ -850,6 +878,37 @@ mod tests {
                 actual_scope: PackageScope::User,
             }
         );
+    }
+
+    #[test]
+    fn command_for_rejects_unimplemented_backends_before_identity_or_argv() {
+        let unsupported = [
+            BackendId::Apt,
+            BackendId::Dnf5,
+            BackendId::Dnf4,
+            BackendId::Zypper,
+            BackendId::Apk,
+            BackendId::Xbps,
+            BackendId::Snap,
+            BackendId::Brew,
+            BackendId::Nix,
+        ];
+        let foreign_identity = BuiltinBackend::new(BackendId::Pacman)
+            .identity(NativePackageKey::new("same-name").unwrap());
+
+        for backend in unsupported {
+            let provider = BuiltinBackend::new(backend);
+            let operation = WriteOperation::Install {
+                packages: vec![foreign_identity.clone()],
+            };
+            assert_eq!(
+                provider.command_for(&operation),
+                Err(BackendError::UnsupportedCapability {
+                    backend,
+                    capability: CapabilitySet::INSTALL,
+                })
+            );
+        }
     }
 
     #[test]
