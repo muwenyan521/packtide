@@ -79,6 +79,19 @@ pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeC
             args: &["update"],
             privilege: PackageUpgradePrivilege::User,
         },
+        crate::BackendId::Apt
+        | crate::BackendId::Dnf5
+        | crate::BackendId::Dnf4
+        | crate::BackendId::Zypper
+        | crate::BackendId::Apk
+        | crate::BackendId::Xbps
+        | crate::BackendId::Snap
+        | crate::BackendId::Brew
+        | crate::BackendId::Nix => PackageUpgradeCommand {
+            program: "unsupported",
+            args: &[],
+            privilege: PackageUpgradePrivilege::User,
+        },
     }
 }
 

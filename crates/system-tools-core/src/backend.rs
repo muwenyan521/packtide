@@ -8,20 +8,52 @@ use crate::{CommandPrivilege, TransactionAction};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BackendId {
     Pacman,
+    Apt,
+    Dnf5,
+    Dnf4,
+    Zypper,
+    Apk,
+    Xbps,
     Paru,
     Yay,
     Flatpak,
+    Snap,
+    Brew,
+    Nix,
 }
 
 impl BackendId {
-    pub const ALL: [Self; 4] = [Self::Pacman, Self::Paru, Self::Yay, Self::Flatpak];
+    pub const ALL: [Self; 13] = [
+        Self::Pacman,
+        Self::Apt,
+        Self::Dnf5,
+        Self::Dnf4,
+        Self::Zypper,
+        Self::Apk,
+        Self::Xbps,
+        Self::Paru,
+        Self::Yay,
+        Self::Flatpak,
+        Self::Snap,
+        Self::Brew,
+        Self::Nix,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pacman => "pacman",
+            Self::Apt => "apt",
+            Self::Dnf5 => "dnf5",
+            Self::Dnf4 => "dnf4",
+            Self::Zypper => "zypper",
+            Self::Apk => "apk",
+            Self::Xbps => "xbps",
             Self::Paru => "paru",
             Self::Yay => "yay",
             Self::Flatpak => "flatpak",
+            Self::Snap => "snap",
+            Self::Brew => "brew",
+            Self::Nix => "nix",
         }
     }
 }
@@ -37,20 +69,33 @@ pub enum PackageKind {
     System,
     Aur,
     Flatpak,
+    Snap,
+    BrewFormula,
+    BrewCask,
+    Nix,
 }
 
 impl PackageKind {
-    pub const ALL: [Self; 3] = [Self::System, Self::Aur, Self::Flatpak];
+    pub const ALL: [Self; 7] = [
+        Self::System,
+        Self::Aur,
+        Self::Flatpak,
+        Self::Snap,
+        Self::BrewFormula,
+        Self::BrewCask,
+        Self::Nix,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PackageScope {
     System,
     User,
+    Profile,
 }
 
 impl PackageScope {
-    pub const ALL: [Self; 2] = [Self::System, Self::User];
+    pub const ALL: [Self; 3] = [Self::System, Self::User, Self::Profile];
 }
 
 pub type Scope = PackageScope;
@@ -79,7 +124,36 @@ impl fmt::Display for PackageId {
     }
 }
 
-pub type NativePackageKey = PackageId;
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NativePackageKey(String);
+
+impl NativePackageKey {
+    pub fn new(value: impl Into<String>) -> Result<Self, BackendError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            Err(BackendError::InvalidPackageId)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<PackageId> for NativePackageKey {
+    fn from(value: PackageId) -> Self {
+        Self(value.0)
+    }
+}
+
+impl fmt::Display for NativePackageKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 pub type NativeKey = NativePackageKey;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -95,13 +169,13 @@ impl PackageIdentity {
         backend: BackendId,
         kind: PackageKind,
         scope: PackageScope,
-        native_key: NativePackageKey,
+        native_key: impl Into<NativePackageKey>,
     ) -> Self {
         Self {
             backend,
             kind,
             scope,
-            native_key,
+            native_key: native_key.into(),
         }
     }
 
@@ -190,15 +264,15 @@ pub struct ReadResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WriteOperation {
-    Install { packages: Vec<PackageId> },
-    Remove { packages: Vec<PackageId> },
-    Upgrade { packages: Vec<PackageId> },
-    Downgrade { packages: Vec<PackageId> },
+    Install { packages: Vec<PackageIdentity> },
+    Remove { packages: Vec<PackageIdentity> },
+    Upgrade { packages: Vec<PackageIdentity> },
+    Downgrade { packages: Vec<PackageIdentity> },
     SystemUpgrade,
 }
 
 impl WriteOperation {
-    pub fn transaction(action: TransactionAction, packages: Vec<PackageId>) -> Self {
+    pub fn transaction(action: TransactionAction, packages: Vec<PackageIdentity>) -> Self {
         match action {
             TransactionAction::Install => Self::Install { packages },
             TransactionAction::Remove => Self::Remove { packages },
@@ -217,7 +291,7 @@ impl WriteOperation {
         }
     }
 
-    pub fn packages(&self) -> &[PackageId] {
+    pub fn packages(&self) -> &[PackageIdentity] {
         match self {
             Self::Install { packages }
             | Self::Remove { packages }
@@ -261,6 +335,14 @@ pub enum BackendError {
         backend: BackendId,
     },
     InvalidPlan,
+    IdentityMismatch {
+        expected_backend: BackendId,
+        actual_backend: BackendId,
+        expected_kind: PackageKind,
+        actual_kind: PackageKind,
+        expected_scope: PackageScope,
+        actual_scope: PackageScope,
+    },
 }
 
 impl fmt::Display for BackendError {
@@ -276,6 +358,19 @@ impl fmt::Display for BackendError {
                 write!(f, "backend {} requires a search query", backend.as_str())
             }
             Self::InvalidPlan => write!(f, "invalid transaction plan"),
+            Self::IdentityMismatch {
+                expected_backend,
+                actual_backend,
+                expected_kind,
+                actual_kind,
+                expected_scope,
+                actual_scope,
+            } => write!(
+                f,
+                "package identity does not belong to backend {}: got {} ({actual_kind:?}, {actual_scope:?}), expected ({expected_kind:?}, {expected_scope:?})",
+                expected_backend.as_str(),
+                actual_backend.as_str(),
+            ),
         }
     }
 }
@@ -316,7 +411,7 @@ pub trait PackageBackend {
             return Err(BackendError::QueryRequired { backend: self.id() });
         }
         let packages = match &operation {
-            ReadOperation::Details { package } => vec![self.identity(package.clone())],
+            ReadOperation::Details { package } => vec![self.identity(package.clone().into())],
             _ => Vec::new(),
         };
         Ok(ReadResult {
@@ -339,7 +434,7 @@ pub trait PackageBackend {
             operation: ReadOperation::Catalog,
             packages: packages
                 .into_iter()
-                .map(|package| self.identity(package))
+                .map(|package| self.identity(package.into()))
                 .collect(),
             source: self.catalog_strategy(),
         })
@@ -379,12 +474,7 @@ pub trait PackageBackend {
             return Err(BackendError::InvalidPlan);
         }
         let command = self.command_for(&operation)?;
-        let packages = operation
-            .packages()
-            .iter()
-            .cloned()
-            .map(|package| self.identity(package))
-            .collect();
+        let packages = operation.packages().to_vec();
         Ok(TransactionPlan {
             backend: self.id(),
             kind: self.kind(),
@@ -400,7 +490,11 @@ pub trait PackageBackend {
         action: TransactionAction,
         packages: Vec<PackageId>,
     ) -> Result<TransactionPlan, BackendError> {
-        self.write(WriteOperation::transaction(action, packages))
+        let identities = packages
+            .into_iter()
+            .map(|package| self.identity(package.into()))
+            .collect();
+        self.write(WriteOperation::transaction(action, identities))
     }
 
     fn dispatch(&self, operation: BackendOperation) -> Result<BackendResponse, BackendError> {
@@ -411,6 +505,20 @@ pub trait PackageBackend {
     }
 
     fn command_for(&self, operation: &WriteOperation) -> Result<CommandPlan, BackendError> {
+        if let Some(package) = operation.packages().iter().find(|package| {
+            package.backend != self.id()
+                || package.kind != self.kind()
+                || package.scope != self.scope()
+        }) {
+            return Err(BackendError::IdentityMismatch {
+                expected_backend: self.id(),
+                actual_backend: package.backend,
+                expected_kind: self.kind(),
+                actual_kind: package.kind,
+                expected_scope: self.scope(),
+                actual_scope: package.scope,
+            });
+        }
         let mut command = CommandPlan::new(PathBuf::from(self.id().as_str()))
             .with_backend(self.id())
             .with_locale("C")
@@ -437,7 +545,9 @@ pub trait PackageBackend {
         };
         command.args.push(OsString::from(flag));
         for package in operation.packages() {
-            command.args.push(OsString::from(package.as_str()));
+            command
+                .args
+                .push(OsString::from(package.native_key.as_str()));
         }
         Ok(command)
     }
@@ -471,22 +581,53 @@ impl PackageBackend for BuiltinBackend {
 
     fn class(&self) -> BackendClass {
         match self.0 {
-            BackendId::Pacman => BackendClass::Native,
-            BackendId::Paru | BackendId::Yay | BackendId::Flatpak => BackendClass::Optional,
+            BackendId::Pacman
+            | BackendId::Apt
+            | BackendId::Dnf5
+            | BackendId::Dnf4
+            | BackendId::Zypper
+            | BackendId::Apk
+            | BackendId::Xbps => BackendClass::Native,
+            BackendId::Paru
+            | BackendId::Yay
+            | BackendId::Flatpak
+            | BackendId::Snap
+            | BackendId::Brew
+            | BackendId::Nix => BackendClass::Optional,
         }
     }
 
     fn kind(&self) -> PackageKind {
         match self.0 {
             BackendId::Flatpak => PackageKind::Flatpak,
+            BackendId::Snap => PackageKind::Snap,
+            BackendId::Brew => PackageKind::BrewFormula,
+            BackendId::Nix => PackageKind::Nix,
             BackendId::Paru | BackendId::Yay => PackageKind::Aur,
-            BackendId::Pacman => PackageKind::System,
+            BackendId::Pacman
+            | BackendId::Apt
+            | BackendId::Dnf5
+            | BackendId::Dnf4
+            | BackendId::Zypper
+            | BackendId::Apk
+            | BackendId::Xbps => PackageKind::System,
         }
     }
 
     fn scope(&self) -> PackageScope {
-        if self.0 == BackendId::Pacman {
+        if matches!(
+            self.0,
+            BackendId::Pacman
+                | BackendId::Apt
+                | BackendId::Dnf5
+                | BackendId::Dnf4
+                | BackendId::Zypper
+                | BackendId::Apk
+                | BackendId::Xbps
+        ) {
             PackageScope::System
+        } else if matches!(self.0, BackendId::Brew | BackendId::Nix) {
+            PackageScope::Profile
         } else {
             PackageScope::User
         }
@@ -507,13 +648,24 @@ impl PackageBackend for BuiltinBackend {
             BackendId::Pacman | BackendId::Paru | BackendId::Yay => write
                 .union(CapabilitySet::DOWNGRADE)
                 .union(CapabilitySet::SYSTEM_UPGRADE),
+            _ => CapabilitySet::empty(),
         }
     }
 
     fn catalog_strategy(&self) -> CatalogStrategy {
         match self.0 {
-            BackendId::Flatpak => CatalogStrategy::QueryRequired,
-            BackendId::Pacman | BackendId::Paru | BackendId::Yay => CatalogStrategy::Enumerated,
+            BackendId::Snap | BackendId::Nix => CatalogStrategy::DirectQuery,
+            BackendId::Pacman
+            | BackendId::Apt
+            | BackendId::Dnf5
+            | BackendId::Dnf4
+            | BackendId::Zypper
+            | BackendId::Apk
+            | BackendId::Xbps
+            | BackendId::Paru
+            | BackendId::Yay
+            | BackendId::Flatpak
+            | BackendId::Brew => CatalogStrategy::Enumerated,
         }
     }
 }
@@ -522,8 +674,8 @@ impl PackageBackend for BuiltinBackend {
 mod tests {
     use super::{
         BackendClass, BackendError, BackendId, BackendOperation, BackendResponse, BuiltinBackend,
-        CapabilitySet, CatalogStrategy, PackageBackend, PackageId, PackageIdentity, PackageKind,
-        PackageScope, ReadOperation, Scope, WriteOperation,
+        CapabilitySet, CatalogStrategy, NativePackageKey, PackageBackend, PackageId,
+        PackageIdentity, PackageKind, PackageScope, ReadOperation, Scope, WriteOperation,
     };
     use crate::{CommandPrivilege, TransactionAction};
 
@@ -546,6 +698,18 @@ mod tests {
             assert!(PackageScope::ALL.contains(&builtin.scope()));
         }
         assert_eq!(Scope::User, PackageScope::User);
+        assert_eq!(
+            BuiltinBackend::new(BackendId::Brew).scope(),
+            PackageScope::Profile
+        );
+        assert_eq!(
+            BuiltinBackend::new(BackendId::Nix).scope(),
+            PackageScope::Profile
+        );
+        assert_eq!(
+            BuiltinBackend::new(BackendId::Apt).capabilities().bits(),
+            CapabilitySet::empty().bits()
+        );
     }
 
     #[test]
@@ -556,14 +720,23 @@ mod tests {
             PackageScope::System,
             PackageId::new("same-name").unwrap(),
         );
-        let aur = PackageIdentity::new(
-            BackendId::Paru,
-            PackageKind::Aur,
+        let apt = PackageIdentity::new(
+            BackendId::Apt,
+            PackageKind::System,
+            PackageScope::System,
+            PackageId::new("same-name").unwrap(),
+        );
+        let user_scope = PackageIdentity::new(
+            BackendId::Pacman,
+            PackageKind::System,
             PackageScope::User,
             PackageId::new("same-name").unwrap(),
         );
-        assert_ne!(pacman, aur);
+        assert_ne!(pacman, apt);
+        assert_ne!(pacman, user_scope);
         assert_eq!(pacman.key().as_str(), "same-name");
+        let native = NativePackageKey::new("same-name").unwrap();
+        assert_eq!(native.as_str(), "same-name");
     }
 
     #[test]
@@ -585,12 +758,20 @@ mod tests {
 
     #[test]
     fn flatpak_uses_application_ids_without_display_labels() {
+        let display_label = "Example App (flathub)";
+        let application_id = "org.example.App";
         let plan = BuiltinBackend::new(BackendId::Flatpak)
-            .transaction(TransactionAction::Remove, ids(&["org.example.App"]))
+            .transaction(TransactionAction::Remove, ids(&[application_id]))
             .expect("flatpak uninstall plan");
         assert_eq!(plan.scope, PackageScope::User);
-        assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
-        assert_eq!(plan.packages[0].native_key.as_str(), "org.example.App");
+        assert_eq!(plan.command.args, ["uninstall", application_id]);
+        assert!(
+            !plan
+                .command
+                .args
+                .contains(&std::ffi::OsString::from(display_label))
+        );
+        assert_eq!(plan.packages[0].native_key.as_str(), application_id);
     }
 
     #[test]
@@ -618,17 +799,14 @@ mod tests {
     }
 
     #[test]
-    fn query_required_catalog_and_unsupported_write_fail_before_execution() {
+    fn flatpak_catalog_is_enumerated_and_unsupported_write_fails_before_execution() {
         let flatpak = BuiltinBackend::new(BackendId::Flatpak);
-        assert_eq!(
-            flatpak.catalog(),
-            Err(BackendError::QueryRequired {
-                backend: BackendId::Flatpak
-            })
-        );
+        let catalog = flatpak.catalog().expect("Flatpak catalog is enumerable");
+        assert_eq!(catalog.source, CatalogStrategy::Enumerated);
+        assert!(catalog.packages.is_empty());
         assert_eq!(
             flatpak.write(WriteOperation::Downgrade {
-                packages: ids(&["org.example.App"])
+                packages: vec![flatpak.identity(NativePackageKey::new("org.example.App").unwrap())]
             }),
             Err(BackendError::UnsupportedCapability {
                 backend: BackendId::Flatpak,
@@ -646,10 +824,32 @@ mod tests {
         assert!(matches!(read, BackendResponse::Read(_)));
         let write = backend
             .dispatch(BackendOperation::Write(WriteOperation::Install {
-                packages: ids(&["core/bash"]),
+                packages: vec![backend.identity(NativePackageKey::new("core/bash").unwrap())],
             }))
             .unwrap();
         assert!(matches!(write, BackendResponse::Write(_)));
+    }
+
+    #[test]
+    fn write_rejects_identity_from_another_backend_before_building_argv() {
+        let pacman = BuiltinBackend::new(BackendId::Pacman);
+        let paru = BuiltinBackend::new(BackendId::Paru);
+        let error = pacman
+            .write(WriteOperation::Install {
+                packages: vec![paru.identity(NativePackageKey::new("same-name").unwrap())],
+            })
+            .unwrap_err();
+        assert_eq!(
+            error,
+            BackendError::IdentityMismatch {
+                expected_backend: BackendId::Pacman,
+                actual_backend: BackendId::Paru,
+                expected_kind: PackageKind::System,
+                actual_kind: PackageKind::Aur,
+                expected_scope: PackageScope::System,
+                actual_scope: PackageScope::User,
+            }
+        );
     }
 
     #[test]
@@ -663,14 +863,22 @@ mod tests {
     }
 
     #[test]
-    fn catalog_strategy_declares_enumerated_or_query_required() {
+    fn catalog_strategy_declares_provider_query_requirements() {
         assert_eq!(
             BuiltinBackend::new(BackendId::Pacman).catalog_strategy(),
             CatalogStrategy::Enumerated
         );
         assert_eq!(
             BuiltinBackend::new(BackendId::Flatpak).catalog_strategy(),
-            CatalogStrategy::QueryRequired
+            CatalogStrategy::Enumerated
+        );
+        assert_eq!(
+            BuiltinBackend::new(BackendId::Snap).catalog_strategy(),
+            CatalogStrategy::DirectQuery
+        );
+        assert_eq!(
+            BuiltinBackend::new(BackendId::Nix).catalog_strategy(),
+            CatalogStrategy::DirectQuery
         );
     }
 }
