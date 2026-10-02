@@ -1196,15 +1196,18 @@ fn preview_details_use_installed_query_only_for_remove_and_downgrade() {
             "{kind} preview failed; stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8_lossy(&output.stdout).into_owned()
     };
 
-    run_preview("remove", "core\tbash\t5.3-1");
+    let remove_pacman = run_preview("remove", "core\tbash\t5.3-1");
+    assert!(!remove_pacman.contains("detail-qi:"));
     assert_eq!(
         fs::read_to_string(&pacman_argv).expect("read Pacman remove preview argv"),
         "--color=always\n-Qi\nbash\n"
     );
 
-    run_preview("remove", "aur\tbash\t5.3-1");
+    let remove_aur = run_preview("remove", "aur\tbash\t5.3-1");
+    assert!(!remove_aur.contains("detail-qi:"));
     assert_eq!(
         fs::read_to_string(&paru_argv).expect("read AUR remove preview argv"),
         "--color=always\n-Qi\nbash\n"
@@ -1216,7 +1219,8 @@ fn preview_details_use_installed_query_only_for_remove_and_downgrade() {
         "--color=always\n-Si\ncore/bash\n"
     );
 
-    run_preview("downgrade", "core\tbash\t5.3-1");
+    let downgrade = run_preview("downgrade", "core\tbash\t5.3-1");
+    assert!(!downgrade.contains("detail-qi:"));
     assert_eq!(
         fs::read_to_string(&paru_argv).expect("read downgrade preview argv"),
         "--color=always\n-Qi\nbash\n"

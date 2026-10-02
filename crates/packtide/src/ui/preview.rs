@@ -13,18 +13,18 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let kind = args.first().map(String::as_str).unwrap_or_default();
     let raw_row = args.get(1).map(String::as_str).unwrap_or_default();
     let parsed = parse_package_row(raw_row);
-    let package = parsed
+    let display_package = parsed
         .as_ref()
         .map(|row| row.name.as_str())
         .unwrap_or_default();
     let lang = crate::locale::current();
-    if package.is_empty() {
+    if display_package.is_empty() {
         bail!(
             "{}",
             crate::locale::text(lang, "preview.missing_package", &[])
         );
     }
-    if !valid_package_name(package) {
+    if !valid_package_name(display_package) {
         bail!("{}", crate::locale::text(lang, "preview.invalid_row", &[]));
     }
     let source = parsed.as_ref().map(|row| row.source);
@@ -35,7 +35,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
                 .as_deref()
                 .map(|repo| format!("{repo}/{}", row.name))
         })
-        .unwrap_or_else(|| package.to_owned());
+        .unwrap_or_else(|| display_package.to_owned());
     let backend_id = match source {
         Some(PackageSource::Pacman) if matches!(kind, "install" | "downgrade") => {
             if crate::app::package_helper().unwrap_or("paru") == "yay" {
@@ -58,16 +58,11 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let identity_key = if matches!(kind, "remove" | "downgrade")
         && !matches!(source, Some(PackageSource::Flatpak))
     {
-        format!("detail-qi:{package}")
+        format!("detail-qi:{display_package}")
     } else {
         identity_key
     };
     let identity = BuiltinBackend::new(backend_id).identity(NativePackageKey::new(identity_key)?);
-    let package = identity
-        .key()
-        .as_str()
-        .rsplit_once('/')
-        .map_or(identity.key().as_str(), |(_, name)| name);
     if !matches!(
         (kind, source),
         (
@@ -126,7 +121,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         .unwrap_or(80);
     println!(
         "{}",
-        preview_header(package, &source_label, &version, width)
+        preview_header(display_package, &source_label, &version, width)
     );
     if metadata.trim().is_empty() {
         println!("{}", crate::locale::text(lang, "preview.empty", &[]));
