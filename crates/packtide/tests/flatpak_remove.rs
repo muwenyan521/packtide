@@ -265,7 +265,7 @@ fn remove_cancel_keeps_all_transactions_unstarted() {
 
     fixture.write_executable(
         "pacman",
-        "#!/bin/sh\ncase \"$2\" in\n  -Q) printf 'bash 5.3-1\\n' ;;\n  -Sl) printf 'core bash 5.3-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$2\" in\n  -Q) printf 'bash 5.3-1\\n' ;;\n  -Qm) exit 0 ;;\n  -Sl) printf 'core bash 5.3-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
     );
     fixture.write_executable(
         "paru",

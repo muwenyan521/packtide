@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::{
@@ -113,14 +113,10 @@ fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::Pack
     } else {
         BackendId::Paru
     };
-    let foreign_installed = if command_exists(foreign.as_str()) {
-        BuiltinBackend::new(foreign)
-            .read(ReadOperation::Installed)
-            .map(|result| result.packages)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let foreign_installed = BuiltinBackend::new(foreign)
+        .read(ReadOperation::Installed)
+        .with_context(|| format!("{} typed installed read failed", foreign.as_str()))?
+        .packages;
     let foreign_names = foreign_installed
         .iter()
         .map(|package| package.native_key.as_str())
