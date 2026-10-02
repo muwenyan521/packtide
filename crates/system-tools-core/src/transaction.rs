@@ -54,6 +54,50 @@ pub fn package_upgrade_command(
     Ok(command)
 }
 
+pub fn package_keyring_plan(
+    keyrings: &[&str],
+    resolver: &ExecutableResolver,
+) -> Result<CommandPlan, BackendError> {
+    let program =
+        resolver
+            .resolve(OsStr::new("pacman"))
+            .ok_or_else(|| BackendError::CommandUnavailable {
+                backend: BackendId::Pacman,
+                operation: "update package keyrings",
+                command: "pacman".to_owned(),
+            })?;
+    let mut plan = CommandPlan::new(program)
+        .with_backend(BackendId::Pacman)
+        .with_env_remove("LD_PRELOAD")
+        .with_env_remove("LD_LIBRARY_PATH")
+        .with_locale("C")
+        .with_privilege(CommandPrivilege::Elevated);
+    plan.args.extend(
+        ["-Sy", "--needed", "--noconfirm"]
+            .into_iter()
+            .map(OsStr::new)
+            .map(ToOwned::to_owned),
+    );
+    plan.args.extend(
+        keyrings
+            .iter()
+            .map(|keyring| OsStr::new(keyring).to_owned()),
+    );
+    Ok(plan)
+}
+
+pub fn run_package_keyring_update_with_resolver(
+    keyrings: &[&str],
+    resolver: &ExecutableResolver,
+) -> Result<ExitStatus, BackendError> {
+    let plan = package_keyring_plan(keyrings, resolver)?;
+    run_command_plan(&plan).map_err(|error| BackendError::CommandFailed {
+        backend: BackendId::Pacman,
+        operation: "update package keyrings",
+        message: error.to_string(),
+    })
+}
+
 pub fn run_package_upgrade(backend: BackendId) -> Result<ExitStatus, BackendError> {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
     run_package_upgrade_with_resolver(backend, &resolver)

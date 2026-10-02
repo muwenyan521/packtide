@@ -27,6 +27,7 @@ pub use platform::{
     detect_native_backend_from_file, detect_native_backend_from_path, parse_os_release,
 };
 pub use transaction::{
-    CommandPrivilege, PackageUpgradeCommand, PackageUpgradePrivilege, package_upgrade_command,
-    package_upgrade_command_for, run_package_upgrade, run_package_upgrade_with_resolver,
+    CommandPrivilege, PackageUpgradeCommand, PackageUpgradePrivilege, package_keyring_plan,
+    package_upgrade_command, package_upgrade_command_for, run_package_keyring_update_with_resolver,
+    run_package_upgrade, run_package_upgrade_with_resolver,
 };

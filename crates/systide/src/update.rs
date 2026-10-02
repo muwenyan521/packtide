@@ -1,7 +1,7 @@
 use std::fs;
 use system_tools_core::{
-    BackendId, PackageUpgradePrivilege, package_upgrade_command, run_package_upgrade,
-    run_privileged,
+    BackendId, ExecutableResolver, PackageUpgradePrivilege, package_upgrade_command,
+    run_package_keyring_update_with_resolver, run_package_upgrade,
 };
 
 use crate::messages::{Lang, log_error, log_info, log_success, log_warn, msg};
@@ -18,10 +18,10 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> anyhow::Result<()> {
         {
             keyrings.push("archlinuxcn-keyring");
         }
-        let mut args = vec!["pacman", "-Sy", "--needed", "--noconfirm"];
-        args.extend(keyrings);
-        print_summary("keyring", "pacman", "sudo", &args[3..], lang);
-        if run_privileged(&args).is_ok() {
+        let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+        let keyring_refs = keyrings.as_slice();
+        print_summary("keyring", "pacman", "sudo", keyring_refs, lang);
+        if run_package_keyring_update_with_resolver(keyring_refs, &resolver).is_ok() {
             log_success(lang, msg(lang, "keyring_ok"));
         } else {
             log_warn(lang, msg(lang, "keyring_warn"));

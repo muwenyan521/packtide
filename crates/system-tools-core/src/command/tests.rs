@@ -241,3 +241,39 @@ fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
     );
     fs::remove_dir_all(fixture).expect("remove command plan fixture");
 }
+
+#[test]
+fn keyring_plan_uses_absolute_pacman_locale_scrubbing_and_trusted_sudo() {
+    let fixture =
+        std::env::temp_dir().join(format!("system-tools-core-keyring-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&fixture);
+    let bin = fixture.join("bin");
+    fs::create_dir_all(&bin).expect("create fixture bin");
+    let log = fixture.join("sudo.log");
+    write_executable(&bin.join("pacman"), "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &bin.join("sudo"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \\\n  \\\"PATH=$PATH\\\" \\\n  \\\"LC_ALL=${{LC_ALL-<unset>}}\\\" \\\n  \\\"LD_PRELOAD=${{LD_PRELOAD-<unset>}}\\\" > '{}'\nprintf '%s\\n' \\\"$@\\\" >> '{}'\n",
+            log.display(),
+            log.display()
+        ),
+    );
+    let resolver = crate::ExecutableResolver::from_path(Some(bin.as_os_str()));
+    let plan =
+        crate::package_keyring_plan(&["archlinux-keyring"], &resolver).expect("build keyring plan");
+    assert_eq!(plan.program, bin.join("pacman"));
+    assert_eq!(plan.locale.as_deref(), Some(std::ffi::OsStr::new("C")));
+    let runner = PrivilegeRunner::from_search_path(bin.as_os_str()).expect("resolve trusted sudo");
+    runner.run_plan(&plan).expect("run fake sudo");
+    let captured = fs::read_to_string(&log).expect("read sudo capture");
+    assert!(captured.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"));
+    assert!(captured.contains("LC_ALL=C"));
+    assert!(captured.contains("LD_PRELOAD=<unset>"));
+    assert!(captured.contains(&format!("{}\n", bin.join("pacman").display())));
+    assert!(captured.contains("-Sy"), "captured={captured:?}");
+    assert!(captured.contains("--needed"));
+    assert!(captured.contains("--noconfirm"));
+    assert!(captured.contains("archlinux-keyring"));
+    fs::remove_dir_all(fixture).expect("remove fixture");
+}
