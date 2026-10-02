@@ -93,12 +93,35 @@ pub(crate) fn execute_flatpak(packages: &[PackageIdentity]) -> Result<()> {
         .iter()
         .map(|p| p.native_key.as_str())
         .collect::<Vec<_>>();
-    print_summary("remove", "flatpak", "direct", &targets);
+    let scope = packages
+        .first()
+        .map_or(PackageScope::User, |package| package.scope);
+    let privilege = if scope == PackageScope::System {
+        "elevated"
+    } else {
+        "direct"
+    };
+    print_summary_with_scope("remove", "flatpak", privilege, &targets, scope);
     run_command_plan(&plan.command)?;
     Ok(())
 }
 
 pub(crate) fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str]) {
+    let scope = if helper == "pacman" {
+        PackageScope::System
+    } else {
+        PackageScope::User
+    };
+    print_summary_with_scope(action, helper, privilege, targets, scope);
+}
+
+fn print_summary_with_scope(
+    action: &str,
+    helper: &str,
+    privilege: &str,
+    targets: &[&str],
+    scope: PackageScope,
+) {
     let summary = summary_line(action, helper, privilege, targets);
     let lang = crate::locale::current();
     let backend = match helper {
@@ -110,11 +133,7 @@ pub(crate) fn print_summary(action: &str, helper: &str, privilege: &str, targets
         "flatpak" => crate::locale::source_label(lang, system_tools_core::PackageSource::Flatpak),
         _ => crate::locale::backend_label(lang, BackendId::Paru),
     };
-    let scope = if helper == "pacman" {
-        crate::locale::scope_label(lang, PackageScope::System)
-    } else {
-        crate::locale::scope_label(lang, PackageScope::User)
-    };
+    let scope = crate::locale::scope_label(lang, scope);
     let summary = format!("{summary} backend={backend} scope={scope}");
     if std::io::stdout().is_terminal()
         && let Some((label, rest)) = summary.split_once(' ')

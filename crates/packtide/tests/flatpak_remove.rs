@@ -135,6 +135,129 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
 }
 
 #[test]
+fn mixed_scope_flatpak_remove_accepts_each_scope_with_its_own_privilege() {
+    let fixture = Fixture::new();
+    let flatpak_invocations = fixture.path().join("flatpak.invocations");
+    let fzf_input = fixture.path().join("fzf.input");
+
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$1:$2\" in\n  --color=never:-Q) exit 0 ;;\n  --color=never:-Qm) exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable("paru", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable(
+        "flatpak",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  list) printf 'org.example.User\\tflathub\\tUser Display\\tuser\\norg.example.System\\tflathub\\tSystem Display\\tsystem\\n' ;;\n  uninstall) printf 'uid=%s' \"$(id -u)\" >> '{0}'; printf '\\t%s' \"$@\" >> '{0}'; printf '\\n' >> '{0}' ;;\n  *) exit 64 ;;\nesac\n",
+            flatpak_invocations.display()
+        ),
+    );
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\ncat > '{0}'\ngrep 'org.example' '{0}'\n",
+            fzf_input.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["remove"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run mixed-scope Flatpak removal with fake commands");
+
+    assert!(
+        output.status.success(),
+        "mixed-scope remove failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let invocations = fs::read_to_string(&flatpak_invocations).expect("read Flatpak invocations");
+    let invocations = invocations.lines().collect::<Vec<_>>();
+    assert_eq!(invocations.len(), 2);
+    assert!(invocations[0].starts_with("uid="));
+    assert_ne!(invocations[0].split_once('\t').unwrap().0, "uid=0");
+    assert_eq!(
+        invocations[0].split_once('\t').unwrap().1,
+        "uninstall\torg.example.User"
+    );
+    assert_eq!(
+        invocations[1],
+        "uid=0\tuninstall\t--system\torg.example.System"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(
+        "transaction: action=remove helper=flatpak privilege=direct targets=org.example.User backend=Flatpak scope=User"
+    ));
+    assert!(stdout.contains(
+        "transaction: action=remove helper=flatpak privilege=elevated targets=org.example.System backend=Flatpak scope=System"
+    ));
+    assert!(!stdout.contains("User Display"));
+    assert!(!stdout.contains("System Display"));
+    let invocation_log =
+        fs::read_to_string(&flatpak_invocations).expect("read Flatpak invocations");
+    assert!(!invocation_log.contains("User Display"));
+    assert!(!invocation_log.contains("System Display"));
+    assert!(!invocation_log.contains("flatpak@system"));
+}
+
+#[test]
+fn mixed_scope_flatpak_remove_propagates_a_system_group_failure() {
+    let fixture = Fixture::new();
+    let flatpak_invocations = fixture.path().join("flatpak.invocations");
+    let fzf_input = fixture.path().join("fzf.input");
+
+    fixture.write_executable(
+        "pacman",
+        "#!/bin/sh\ncase \"$1:$2\" in\n  --color=never:-Q) exit 0 ;;\n  --color=never:-Qm) exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+    );
+    fixture.write_executable("paru", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable(
+        "flatpak",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n  list) printf 'org.example.User\\tflathub\\tUser Display\\tuser\\norg.example.System\\tflathub\\tSystem Display\\tsystem\\n' ;;\n  uninstall) printf 'uid=%s' \"$(id -u)\" >> '{0}'; printf '\\t%s' \"$@\" >> '{0}'; printf '\\n' >> '{0}'; if [ \"$2\" = \"--system\" ]; then exit 23; fi; exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+            flatpak_invocations.display()
+        ),
+    );
+    fixture.write_executable(
+        "fzf",
+        &format!(
+            "#!/bin/sh\ncat > '{0}'\ngrep 'org.example' '{0}'\n",
+            fzf_input.display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+        .args(["remove"])
+        .env("PATH", path)
+        .env("PACKTIDE_UI_LANG", "en")
+        .output()
+        .expect("run failing mixed-scope Flatpak removal with fake commands");
+
+    assert!(
+        !output.status.success(),
+        "system removal failure was masked"
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "system failure had no error context"
+    );
+    let invocations = fs::read_to_string(&flatpak_invocations).expect("read Flatpak invocations");
+    let invocations = invocations.lines().collect::<Vec<_>>();
+    assert_eq!(invocations.len(), 2);
+    assert!(invocations[0].starts_with("uid="));
+    assert_ne!(invocations[0].split_once('\t').unwrap().0, "uid=0");
+    assert_eq!(
+        invocations[1],
+        "uid=0\tuninstall\t--system\torg.example.System"
+    );
+}
+
+#[test]
 fn remove_cancel_keeps_all_transactions_unstarted() {
     let fixture = Fixture::new();
     let paru_argv = fixture.path().join("paru.argv");

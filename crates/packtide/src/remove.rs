@@ -53,7 +53,8 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         return Ok(());
     }
     let mut package_ids = Vec::new();
-    let mut flatpak = Vec::new();
+    let mut flatpak_user = Vec::new();
+    let mut flatpak_system = Vec::new();
     for row in selected.lines() {
         let Some(package) = parse_package_row(row) else {
             continue;
@@ -81,7 +82,10 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         let identity =
             PackageIdentity::new(backend, kind, scope, NativePackageKey::new(package.name)?);
         if package.source == PackageSource::Flatpak {
-            flatpak.push(identity);
+            match scope {
+                PackageScope::System => flatpak_system.push(identity),
+                PackageScope::User | PackageScope::Profile => flatpak_user.push(identity),
+            }
         } else {
             package_ids.push(identity);
         }
@@ -89,8 +93,13 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     if !package_ids.is_empty() {
         execute_package_typed(helper, TransactionAction::Remove, &package_ids)?;
     }
-    if !flatpak.is_empty() && command_exists("flatpak") {
-        execute_flatpak(&flatpak)?;
+    if command_exists("flatpak") {
+        if !flatpak_user.is_empty() {
+            execute_flatpak(&flatpak_user)?;
+        }
+        if !flatpak_system.is_empty() {
+            execute_flatpak(&flatpak_system)?;
+        }
     }
     Ok(())
 }
