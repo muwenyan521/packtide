@@ -3,10 +3,10 @@ use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::{
     BackendId, BuiltinBackend, PackageBackend, PackageSource, ReadOperation, TransactionAction,
-    command_exists, run_capture_path,
+    command_exists,
 };
 
-use crate::sources::{flatpak_rows, parse_remove_rows};
+use crate::model::{PackageListing, PackageRecord};
 use crate::transaction::{execute_flatpak, execute_package};
 use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_rows};
 
@@ -80,56 +80,37 @@ fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
     let typed_installed = BuiltinBackend::new(BackendId::Pacman)
         .read(ReadOperation::Installed)
         .map_err(|error| anyhow::anyhow!("pacman typed installed read failed: {error}"))?;
-    let typed_installed_names = typed_installed
+    let mut records = typed_installed
         .packages
-        .iter()
-        .map(|package| package.native_key.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let typed_flatpak_ids = if command_exists("flatpak") {
-        BuiltinBackend::new(BackendId::Flatpak)
+        .into_iter()
+        .map(|package| PackageRecord {
+            source: PackageSource::Pacman,
+            repository: None,
+            name: package.native_key.as_str().to_owned(),
+            listing: PackageListing::Version(String::new()),
+            installed: true,
+        })
+        .collect::<Vec<_>>();
+    if command_exists("flatpak") {
+        let typed_flatpak = BuiltinBackend::new(BackendId::Flatpak)
             .read(ReadOperation::Installed)
             .map_err(|error| anyhow::anyhow!("Flatpak typed installed read failed: {error}"))?
-            .packages
-            .into_iter()
-            .map(|package| package.native_key.as_str().to_owned())
-            .collect::<std::collections::HashSet<_>>()
-    } else {
-        std::collections::HashSet::new()
-    };
-    let pacman_for_installed = pacman.to_path_buf();
-    let pacman_for_sync = pacman.to_path_buf();
-    let (installed, repo_names, flatpak) = std::thread::scope(|scope| -> Result<_> {
-        let installed = scope.spawn(|| {
-            run_capture_path(&pacman_for_installed, &["--color=never", "-Q"], false)
-                .map(|output| output.stdout)
-        });
-        let repo_names = scope.spawn(|| {
-            Ok::<_, anyhow::Error>(
-                run_capture_path(&pacman_for_sync, &["--color=never", "-Sl"], true)
-                    .map(|output| output.stdout)
-                    .unwrap_or_default(),
-            )
-        });
-        let flatpak = scope.spawn(|| Ok::<_, anyhow::Error>(flatpak_rows()));
-        Ok((
-            installed
-                .join()
-                .map_err(|_| anyhow::anyhow!("installed package query thread panicked"))??,
-            repo_names
-                .join()
-                .map_err(|_| anyhow::anyhow!("repository package query thread panicked"))??,
-            flatpak
-                .join()
-                .map_err(|_| anyhow::anyhow!("Flatpak query thread panicked"))??,
-        ))
-    })?;
-    Ok(parse_remove_rows(&installed, &repo_names, &flatpak)
-        .into_iter()
-        .filter(|record| match record.source {
-            PackageSource::Flatpak => typed_flatpak_ids.contains(&record.name),
-            PackageSource::Pacman | PackageSource::Aur => {
-                typed_installed_names.contains(record.name.as_str())
+            .packages;
+        records.extend(typed_flatpak.into_iter().map(|package| {
+            PackageRecord {
+                source: PackageSource::Flatpak,
+                repository: None,
+                name: package.native_key.as_str().to_owned(),
+                listing: PackageListing::Flatpak {
+                    app_name: package
+                        .display_name
+                        .unwrap_or_else(|| package.native_key.as_str().to_owned()),
+                    origin: package.origin.unwrap_or_default(),
+                },
+                installed: true,
             }
-        })
-        .collect())
+        }));
+    }
+    let _ = pacman;
+    Ok(records)
 }

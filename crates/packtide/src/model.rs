@@ -24,6 +24,7 @@ pub(crate) enum PackageListing {
     Flatpak { app_name: String, origin: String },
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_updates(source: PackageSource, text: &str) -> Vec<PackageUpdate> {
     text.lines()
         .filter_map(|line| {
@@ -38,6 +39,7 @@ pub(crate) fn parse_updates(source: PackageSource, text: &str) -> Vec<PackageUpd
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_flatpak(text: &str) -> Vec<PackageUpdate> {
     text.lines()
         .filter_map(|line| {

@@ -7,13 +7,11 @@ use std::time::Duration;
 use std::time::Instant;
 use system_tools_core::{
     BackendId, BuiltinBackend, CacheStore, ExecutableResolver, PackageBackend, PackageSource,
-    ReadOperation, current_executable, run_capture_path,
+    ReadOperation, current_executable,
 };
 
 use crate::commands::sysup;
-use crate::model::{
-    PackageUpdate, parse_cached_updates, parse_flatpak, parse_updates, render_update_rows,
-};
+use crate::model::{PackageUpdate, parse_cached_updates, render_update_rows};
 use crate::transaction::refresh_waybar_cache;
 use crate::ui::{
     COMMON_FZF_LAYOUT_ARGS, NO_SELECTION, classify_picker_status, picker_columns, shell_quote,
@@ -229,26 +227,20 @@ impl UpdateCache {
 fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
     let mut updates = Vec::new();
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
-    if let Some(checkupdates) = resolver.resolve(std::ffi::OsStr::new("checkupdates")) {
+    if resolver
+        .resolve(std::ffi::OsStr::new("checkupdates"))
+        .is_some()
+    {
         let started = Instant::now();
         let typed = BuiltinBackend::new(BackendId::Pacman)
             .read(ReadOperation::Updates)
             .ok()?;
-        let typed_names = typed
-            .packages
-            .iter()
-            .map(|package| package.native_key.as_str())
-            .collect::<HashSet<_>>();
-        let output = run_capture_path(&checkupdates, &[] as &[&str], true).ok()?;
-        if output.status.success() {
-            updates.extend(
-                parse_updates(PackageSource::Pacman, &output.stdout)
-                    .into_iter()
-                    .filter(|item| typed_names.contains(item.name.as_str())),
-            );
-        } else if output.status.code() != Some(2) {
-            return None;
-        }
+        updates.extend(typed.packages.into_iter().map(|package| PackageUpdate {
+            source: PackageSource::Pacman,
+            name: package.native_key.as_str().to_owned(),
+            version: None,
+            display: package.native_key.as_str().to_owned(),
+        }));
         debug_source_timing("repo_updates", started);
     }
     let helper = resolver
@@ -264,20 +256,18 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         let typed = BuiltinBackend::new(backend)
             .read(ReadOperation::Updates)
             .ok()?;
-        let typed_names = typed
-            .packages
-            .iter()
-            .map(|package| package.native_key.as_str())
-            .collect::<HashSet<_>>();
-        let output = run_capture_path(&helper, &["-Qua"], true).ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        updates.extend(
-            parse_updates(PackageSource::Aur, &output.stdout)
-                .into_iter()
-                .filter(|item| typed_names.contains(item.name.as_str())),
-        );
+        updates.extend(typed.packages.into_iter().map(|package| {
+            PackageUpdate {
+                source: PackageSource::Aur,
+                name: package
+                    .native_key
+                    .as_str()
+                    .trim_start_matches("aur/")
+                    .to_owned(),
+                version: None,
+                display: package.native_key.as_str().to_owned(),
+            }
+        }));
         debug_source_timing("aur_updates", started);
     }
     Some(updates)
@@ -292,23 +282,19 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
             let typed = BuiltinBackend::new(BackendId::Flatpak)
                 .read(ReadOperation::Updates)
                 .ok()?;
-            let typed_names = typed
-                .packages
-                .iter()
-                .map(|package| package.native_key.as_str().to_owned())
-                .collect::<HashSet<_>>();
-            run_capture_path(
-                &flatpak,
-                &["remote-ls", "--updates", "--columns=application,version"],
-                true,
-            )
-            .ok()
-            .map(|output| (output, typed_names))
+            let _ = flatpak;
+            Some(typed)
         })
-        .map(|(output, typed_names)| {
-            parse_flatpak(&output.stdout)
+        .map(|typed| {
+            typed
+                .packages
                 .into_iter()
-                .filter(|item| typed_names.contains(&item.name))
+                .map(|package| PackageUpdate {
+                    source: PackageSource::Flatpak,
+                    name: package.native_key.as_str().to_owned(),
+                    version: None,
+                    display: package.native_key.as_str().to_owned(),
+                })
                 .collect()
         })
         .unwrap_or_default();

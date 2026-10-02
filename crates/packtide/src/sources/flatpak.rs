@@ -1,6 +1,7 @@
 use crate::model::{PackageListing, PackageRecord};
 use system_tools_core::PackageSource;
 
+#[allow(dead_code)]
 pub(crate) fn parse_remove_rows(flatpak: &str) -> Vec<PackageRecord> {
     flatpak
         .lines()

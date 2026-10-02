@@ -31,6 +31,7 @@ pub(crate) fn parse_install_rows(
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_install_line(line: &str, installed: &HashSet<String>) -> Option<PackageRecord> {
     let mut fields = line.split_whitespace();
     let repo = fields.next()?;
@@ -48,6 +49,7 @@ pub(crate) fn parse_install_line(line: &str, installed: &HashSet<String>) -> Opt
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_remove_rows(installed: &str, sync: &str) -> Vec<PackageRecord> {
     let repositories = sync
         .lines()
