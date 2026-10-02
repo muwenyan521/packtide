@@ -1,0 +1,9 @@
+[package]
+name = "package-manager-matrix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+

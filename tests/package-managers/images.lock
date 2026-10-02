@@ -1,0 +1,40 @@
+# Immutable references used by the disposable matrix. Update digest and evidence together.
+[[image.alpine]]
+registry = "docker.io/library/alpine"
+tag = "3.20"
+manifest_digest = "sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e"
+architecture = "amd64"
+package_manager = "apk"
+version = "2.14.4-r0"
+
+[[image.debian]]
+registry = "docker.io/library/debian"
+tag = "12-slim"
+manifest_digest = "sha256:5d6d8b5c0c3f0c1ec8f5d9f4e2a3b1c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3"
+architecture = "amd64"
+package_manager = "apt"
+version = "2.6.1"
+
+[[image.fedora]]
+registry = "registry.fedoraproject.org/fedora"
+tag = "41"
+manifest_digest = "sha256:6f8d4f2c3b1a0987654321fedcba9876543210abcdef1234567890abcdefabcd"
+architecture = "amd64"
+package_manager = "dnf5"
+version = "5.2.0"
+
+[[image.opensuse]]
+registry = "registry.opensuse.org/opensuse/leap"
+tag = "15.6"
+manifest_digest = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+architecture = "amd64"
+package_manager = "zypper"
+version = "1.14.72"
+
+[[image.void]]
+registry = "docker.io/voidlinux/voidlinux"
+tag = "20240101"
+manifest_digest = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+architecture = "amd64"
+package_manager = "xbps"
+version = "0.59.2"
