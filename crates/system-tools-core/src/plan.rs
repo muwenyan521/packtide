@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandPlan {
+    pub backend: Option<crate::BackendId>,
     pub program: PathBuf,
     pub args: Vec<OsString>,
 }
@@ -11,8 +12,14 @@ impl CommandPlan {
     pub fn new(program: PathBuf) -> Self {
         Self {
             program,
+            backend: None,
             args: Vec::new(),
         }
+    }
+
+    pub fn with_backend(mut self, backend: crate::BackendId) -> Self {
+        self.backend = Some(backend);
+        self
     }
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
