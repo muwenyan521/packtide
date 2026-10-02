@@ -83,7 +83,10 @@ pub fn package_upgrade_command_for(
 
 #[cfg(test)]
 mod tests {
-    use super::{PackageUpgradePrivilege, package_upgrade_command, package_upgrade_command_for};
+    use super::{
+        PackageUpgradePrivilege, package_upgrade_command, package_upgrade_command_for,
+        run_package_upgrade,
+    };
     use crate::{BackendError, BackendId, CapabilitySet};
 
     #[test]
@@ -145,5 +148,18 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn typed_upgrade_rejects_unsupported_backend_before_spawn() {
+        let error = run_package_upgrade(BackendId::Apt)
+            .expect_err("APT system upgrade is not implemented by this runner");
+        assert_eq!(
+            error,
+            BackendError::UnsupportedCapability {
+                backend: BackendId::Apt,
+                capability: CapabilitySet::SYSTEM_UPGRADE,
+            }
+        );
     }
 }

@@ -29,7 +29,7 @@ Commands run from the worktree:
   PASS: 17 passed, 0 failed
 
   cargo test -p system-tools-core
-  PASS: 40 unit tests, 1 integration test, 0 failed
+  PASS: 41 unit tests, 1 integration test, 0 failed
 
   cargo test -p packtide --bin packtide
   PASS: 51 passed, 0 failed
