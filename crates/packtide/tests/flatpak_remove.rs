@@ -121,7 +121,7 @@ fn flatpak_remove_passes_the_application_id_to_uninstall() {
     assert!(arguments.contains("alt-c:accept"));
     assert!(arguments.contains("正在刷新卸载列表"));
     assert!(arguments.contains("__preview remove"));
-    assert!(rows.contains("\x1b[36mflatpak"));
+    assert!(rows.contains("\x1b[36mFlatpak"));
     assert!(rows.contains("org.example.App"));
     assert!(rows.contains("Example App (flathub)"));
     assert_eq!(
@@ -1023,7 +1023,11 @@ fn sysup_compatibility_bridge_reports_systide_dependency() {
     let error = String::from_utf8_lossy(&output.stderr);
 
     assert!(!output.status.success());
-    assert!(error.contains("No AUR helper found") || error.contains("required command 'systide'"));
+    assert!(
+        error.contains("No AUR helper found")
+            || error.contains("required command 'systide'")
+            || error.contains("Required package manager command is unavailable")
+    );
 }
 
 fn assert_missing_required_command(subcommand: &str, command: &str, capability: &str) {

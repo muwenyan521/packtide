@@ -1,9 +1,7 @@
 use anyhow::{Result, bail};
 use std::env;
 use std::time::{Instant, SystemTime};
-use system_tools_core::{
-    PackageSource, TransactionAction, require_command_for, resolve_command_for,
-};
+use system_tools_core::{PackageSource, TransactionAction};
 
 use crate::sources::install_rows;
 use crate::transaction::execute_package;
@@ -12,8 +10,18 @@ use crate::ui::{parse_package_row, write_install_catalog};
 pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
     let started = Instant::now();
     let started_at = SystemTime::now();
-    require_command_for("fzf", "the package installation picker", false)?;
-    let pacman = resolve_command_for("pacman", "the package catalog lookup", false)?;
+    crate::app::require_command_for(
+        "fzf",
+        "capability.install",
+        "the package installation picker",
+        false,
+    )?;
+    let pacman = crate::app::require_command_for(
+        "pacman",
+        "capability.catalog",
+        "the package catalog lookup",
+        false,
+    )?;
     let helper = crate::app::package_helper_for("package installation")?;
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
@@ -71,11 +79,17 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
             PackageSource::Aur => aur.push(package.name),
             PackageSource::Pacman => {
                 let Some(repository) = package.repository else {
-                    bail!("install selection is missing its pacman repository");
+                    bail!(
+                        "{}: install selection is missing its pacman repository",
+                        crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+                    );
                 };
                 repo.push(format!("{repository}/{}", package.name));
             }
-            PackageSource::Flatpak => bail!("Flatpak rows are not valid in the package installer"),
+            PackageSource::Flatpak => bail!(
+                "{}: Flatpak rows are not valid in the package installer",
+                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+            ),
         }
     }
     if !repo.is_empty() {

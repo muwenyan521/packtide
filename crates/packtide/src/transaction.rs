@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::io::IsTerminal;
 use std::process::Command;
 use system_tools_core::{
-    BackendId, BuiltinBackend, PackageBackend, PackageId, TransactionAction, command_exists,
-    run_status_path,
+    BackendId, BuiltinBackend, PackageBackend, PackageId, PackageScope, TransactionAction,
+    command_exists, run_status_path,
 };
 
 pub(crate) fn execute_package(
@@ -14,7 +14,10 @@ pub(crate) fn execute_package(
     let backend = match helper {
         "paru" => BackendId::Paru,
         "yay" => BackendId::Yay,
-        _ => anyhow::bail!("unsupported AUR helper: {helper}"),
+        _ => anyhow::bail!(
+            "{}: unsupported AUR helper: {helper}",
+            crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+        ),
     };
     let package_ids = packages
         .iter()
@@ -44,6 +47,22 @@ pub(crate) fn execute_flatpak(packages: &[String]) -> Result<()> {
 
 pub(crate) fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str]) {
     let summary = summary_line(action, helper, privilege, targets);
+    let lang = crate::locale::current();
+    let backend = match helper {
+        "pacman" => format!(
+            "{} · {}",
+            crate::locale::backend_label(lang, BackendId::Pacman),
+            crate::locale::text(lang, "backend.native", &[])
+        ),
+        "flatpak" => crate::locale::source_label(lang, system_tools_core::PackageSource::Flatpak),
+        _ => crate::locale::backend_label(lang, BackendId::Paru),
+    };
+    let scope = if helper == "pacman" {
+        crate::locale::scope_label(lang, PackageScope::System)
+    } else {
+        crate::locale::scope_label(lang, PackageScope::User)
+    };
+    let summary = format!("{summary} backend={backend} scope={scope}");
     if std::io::stdout().is_terminal()
         && let Some((label, rest)) = summary.split_once(' ')
     {

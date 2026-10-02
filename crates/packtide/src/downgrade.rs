@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::process::{Command, Stdio};
 use system_tools_core::PackageSource;
-use system_tools_core::{current_executable, require_command_for, run_capture, run_privileged};
+use system_tools_core::{current_executable, run_capture, run_privileged};
 use unicode_width::UnicodeWidthStr;
 
 use crate::transaction::print_summary;
@@ -14,15 +14,19 @@ pub fn run(query: &[String]) -> Result<()> {
         ("pacman", "downgrade package information"),
         ("downgrade", "the package downgrade transaction"),
     ] {
-        require_command_for(command, capability, false)?;
+        let capability_key = match command {
+            "fzf" => "capability.catalog",
+            "pacman" => "capability.details",
+            "downgrade" => "capability.updates",
+            _ => "capability.details",
+        };
+        crate::app::require_command_for(command, capability_key, capability, false)?;
     }
     if !["paru", "yay"]
         .iter()
         .any(|command| system_tools_core::command_exists(command))
     {
-        bail!(
-            "required AUR helper ('paru' or 'yay') is unavailable for downgrade package details; install paru or yay and retry"
-        );
+        crate::app::package_helper_for("downgrade package details")?;
     }
     let installed = rows()?;
     let helper = if system_tools_core::command_exists("paru") {

@@ -54,7 +54,8 @@ fn list_missing_fzf_names_the_affected_picker() {
 
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("Required command 'fzf' is unavailable"));
+    assert!(error.contains("Required package manager command is unavailable"));
+    assert!(error.contains("Update catalog"));
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn list_cancel_preserves_source_order_and_localized_layout() {
 
     assert!(output.status.success());
     let input = fs::read_to_string(rows).expect("read systide list rows");
-    assert!(input.find("[Pacman").unwrap() < input.find("[AUR").unwrap());
+    assert!(input.find("[官方源").unwrap() < input.find("[AUR").unwrap());
     assert!(input.find("[AUR").unwrap() < input.find("[Flatpak").unwrap());
     let fzf_args = fs::read_to_string(args).expect("read systide fzf args");
     assert!(fzf_args.contains("--track"));

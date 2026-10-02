@@ -36,7 +36,7 @@ fn classify_fzf_status(status: ExitStatus) -> Result<bool> {
     }
 }
 
-pub(crate) fn collect_update_rows() -> Result<String> {
+pub(crate) fn collect_update_rows(lang: Lang) -> Result<String> {
     let mut rows = String::new();
     let mut seen = HashSet::new();
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
@@ -82,13 +82,31 @@ pub(crate) fn collect_update_rows() -> Result<String> {
         ))
     })?;
     if let Some(output) = repo {
-        append_source_rows(&mut rows, &mut seen, "Pacman", "34", &output);
+        append_source_rows(
+            &mut rows,
+            &mut seen,
+            crate::messages::source_label(lang, "pacman"),
+            "34",
+            &output,
+        );
     }
     if let Some(output) = aur {
-        append_source_rows(&mut rows, &mut seen, "AUR", "35", &output);
+        append_source_rows(
+            &mut rows,
+            &mut seen,
+            crate::messages::source_label(lang, "aur"),
+            "35",
+            &output,
+        );
     }
     if let Some(output) = flatpak {
-        append_source_rows(&mut rows, &mut seen, "Flatpak", "36", &output);
+        append_source_rows(
+            &mut rows,
+            &mut seen,
+            crate::messages::source_label(lang, "flatpak"),
+            "36",
+            &output,
+        );
     }
     Ok(rows)
 }
@@ -121,9 +139,14 @@ fn append_source_rows(
 
 pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
     let picker_started = Instant::now();
-    require_command_for("fzf", "the system update list picker", false)
-        .map_err(|_| anyhow::anyhow!("{}", msg(lang, "missing_fzf")))?;
-    let rows = collect_update_rows()?;
+    require_command_for("fzf", "the system update list picker", false).map_err(|_| {
+        anyhow::anyhow!(
+            "{} ({})",
+            msg(lang, "backend.missing_tool"),
+            msg(lang, "capability.catalog")
+        )
+    })?;
+    let rows = collect_update_rows(lang)?;
     if rows.is_empty() {
         println!("{}", msg(lang, "list.empty"));
         return Ok(None);

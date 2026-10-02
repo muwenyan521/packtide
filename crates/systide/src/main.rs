@@ -24,7 +24,8 @@ use ui::{collect_update_rows, show_update_list};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.list_data {
-        print!("{}", collect_update_rows()?);
+        let lang = language("auto")?;
+        print!("{}", collect_update_rows(lang)?);
         return Ok(());
     }
     let lang = language(&cli.ui_lang)?;

@@ -59,9 +59,36 @@ pub(crate) fn text(lang: Lang, key: &str, replacements: &[(&str, &str)]) -> Stri
     value
 }
 
+pub(crate) fn source_label(lang: Lang, source: system_tools_core::PackageSource) -> String {
+    let key = match source {
+        system_tools_core::PackageSource::Pacman => "source.pacman",
+        system_tools_core::PackageSource::Aur => "source.aur",
+        system_tools_core::PackageSource::Flatpak => "source.flatpak",
+    };
+    text(lang, key, &[])
+}
+
+pub(crate) fn backend_label(lang: Lang, backend: system_tools_core::BackendId) -> String {
+    let key = match backend {
+        system_tools_core::BackendId::Pacman => "backend.pacman",
+        system_tools_core::BackendId::Paru
+        | system_tools_core::BackendId::Yay
+        | system_tools_core::BackendId::Flatpak => "backend.optional",
+    };
+    text(lang, key, &[])
+}
+
+pub(crate) fn scope_label(lang: Lang, scope: system_tools_core::PackageScope) -> String {
+    let key = match scope {
+        system_tools_core::PackageScope::System => "scope.system",
+        system_tools_core::PackageScope::User => "scope.user",
+    };
+    text(lang, key, &[])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Lang, parse_lang, resolve, text};
+    use super::{Lang, parse_lang, resolve, source_label, text};
 
     #[test]
     fn normalizes_locale_region_and_encoding_suffixes() {
@@ -107,5 +134,9 @@ mod tests {
             "预览需要软件包名称。"
         );
         assert!(text(Lang::Zh, "preview.failed", &[("error", "timeout")]).contains("timeout"));
+        assert_eq!(
+            source_label(Lang::Zh, system_tools_core::PackageSource::Pacman),
+            "官方源"
+        );
     }
 }

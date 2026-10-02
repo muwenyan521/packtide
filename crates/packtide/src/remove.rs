@@ -1,10 +1,7 @@
 use anyhow::Result;
 use std::env;
 use std::time::{Instant, SystemTime};
-use system_tools_core::{
-    PackageSource, TransactionAction, command_exists, require_command_for, resolve_command_for,
-    run_capture_path,
-};
+use system_tools_core::{PackageSource, TransactionAction, command_exists, run_capture_path};
 
 use crate::sources::{flatpak_rows, parse_remove_rows};
 use crate::transaction::{execute_flatpak, execute_package};
@@ -13,8 +10,18 @@ use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_
 pub(crate) fn run(query: &[String]) -> Result<()> {
     let started = Instant::now();
     let started_at = SystemTime::now();
-    require_command_for("fzf", "the package removal picker", false)?;
-    let pacman = resolve_command_for("pacman", "the installed package lookup", false)?;
+    crate::app::require_command_for(
+        "fzf",
+        "capability.remove",
+        "the package removal picker",
+        false,
+    )?;
+    let pacman = crate::app::require_command_for(
+        "pacman",
+        "capability.catalog",
+        "the installed package lookup",
+        false,
+    )?;
     let helper = crate::app::package_helper_for("package removal")?;
     let records = rows(&pacman)?;
     let rows = render_package_rows(&records, PackageListMode::Remove);

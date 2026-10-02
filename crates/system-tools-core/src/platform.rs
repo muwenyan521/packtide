@@ -311,4 +311,19 @@ ID_LIKE=fedora\ debian
             detect_native_backend("ID=ubuntu\n", |command| command == OsStr::new("dnf"));
         assert_eq!(missing_apt, Err(PlatformError::MissingTool));
     }
+
+    #[test]
+    fn arch_id_selects_pacman_when_native_tool_is_available() {
+        let detected =
+            detect_native_backend("ID=arch\n", |command| command == OsStr::new("pacman"));
+        assert_eq!(detected, Ok(NativeBackend::Pacman));
+    }
+
+    #[test]
+    fn ubuntu_id_does_not_select_dnf_decoy() {
+        let detected = detect_native_backend("ID=ubuntu\nID_LIKE=fedora\n", |command| {
+            command == OsStr::new("dnf")
+        });
+        assert_eq!(detected, Err(PlatformError::MissingTool));
+    }
 }

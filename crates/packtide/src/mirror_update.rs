@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
-use system_tools_core::{require_command_for, run_capture};
+use system_tools_core::run_capture;
 
 mod transaction;
 use transaction::{MirrorBackup, PrivilegedCommandRunner, SystemPrivilegedCommandRunner};
@@ -11,7 +11,12 @@ use transaction::{MirrorBackup, PrivilegedCommandRunner, SystemPrivilegedCommand
 mod tests;
 
 pub fn run(country: Option<String>) -> Result<()> {
-    require_command_for("reflector", "the mirror list update", false)?;
+    crate::app::require_command_for(
+        "reflector",
+        "capability.refresh",
+        "the mirror list update",
+        false,
+    )?;
     let target = country.or_else(detect_country);
     let paths = MirrorPaths {
         mirrorlist: PathBuf::from("/etc/pacman.d/mirrorlist"),

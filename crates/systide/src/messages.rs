@@ -29,6 +29,28 @@ pub(crate) fn msg_with(lang: Lang, key: &str, replacements: &[(&str, String)]) -
     value
 }
 
+pub(crate) fn backend_label(lang: Lang, backend: system_tools_core::NativeBackend) -> &'static str {
+    let key = match backend {
+        system_tools_core::NativeBackend::Pacman => "backend.pacman",
+        system_tools_core::NativeBackend::Apt => "backend.apt",
+        system_tools_core::NativeBackend::Dnf => "backend.dnf",
+        system_tools_core::NativeBackend::Zypper => "backend.zypper",
+        system_tools_core::NativeBackend::Apk => "backend.apk",
+        system_tools_core::NativeBackend::Xbps => "backend.xbps",
+    };
+    msg(lang, key)
+}
+
+pub(crate) fn source_label(lang: Lang, source: &str) -> &'static str {
+    let key = match source {
+        "pacman" => "source.pacman",
+        "aur" => "source.aur",
+        "flatpak" => "source.flatpak",
+        _ => "backend.unsupported",
+    };
+    msg(lang, key)
+}
+
 pub(crate) fn print_intro(lang: Lang) {
     println!("\x1b[1;36m{}\x1b[0m", msg(lang, "intro"));
     println!("{}", msg(lang, "desc"));

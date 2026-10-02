@@ -124,11 +124,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         return Ok(());
     }
     for item in &updates {
-        let source = match item.source {
-            PackageSource::Pacman => "Pacman",
-            PackageSource::Aur => "AUR",
-            PackageSource::Flatpak => "Flatpak",
-        };
+        let source = crate::locale::source_label(crate::locale::current(), item.source);
         println!(
             "[{:<7}] {} {}",
             source,

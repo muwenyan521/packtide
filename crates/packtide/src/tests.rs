@@ -81,7 +81,9 @@ fn keeps_aur_and_flatpak_removal_rows_distinct() {
         ]
     );
     let rows = render_package_rows(&records, PackageListMode::Remove);
-    assert!(rows.contains("\x1b[36mflatpak         \x1b[0m\torg.example.App"));
+    let flatpak_label =
+        crate::locale::source_label(crate::locale::current(), PackageSource::Flatpak);
+    assert!(rows.contains(&format!("\x1b[36m{flatpak_label}")));
     assert!(rows.contains("Example App (flathub)"));
     assert!(!rows.contains("[已安装]"));
     let flatpak_row = rows
