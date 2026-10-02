@@ -4,6 +4,7 @@ mod command;
 mod executable;
 mod package;
 mod plan;
+mod platform;
 mod transaction;
 
 pub use backend::{
@@ -19,6 +20,10 @@ pub use command::{
 pub use executable::{ExecutableResolver, command_exists, current_executable};
 pub use package::{PackageSource, TransactionAction};
 pub use plan::{CacheDecision, CommandPlan, SourceTiming};
+pub use platform::{
+    NativeBackend, PlatformError, backend_from_os_release, detect_native_backend,
+    detect_native_backend_from_file, detect_native_backend_from_path, parse_os_release,
+};
 pub use transaction::{
     PackageUpgradeCommand, PackageUpgradePrivilege, package_upgrade_command,
     package_upgrade_command_for, run_package_upgrade,
