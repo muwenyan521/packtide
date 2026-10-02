@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::{
-    BackendId, BuiltinBackend, PackageBackend, PackageSource, ReadOperation, TransactionAction,
-    command_exists,
+    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageIdentity, PackageKind,
+    PackageScope, PackageSource, ReadOperation, TransactionAction, command_exists,
 };
 
 use crate::model::{PackageListing, PackageRecord};
-use crate::transaction::{execute_flatpak, execute_package};
+use crate::transaction::{execute_flatpak, execute_package_typed};
 use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_rows};
 
 pub(crate) fn run(query: &[String]) -> Result<()> {
@@ -52,23 +52,49 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         );
         return Ok(());
     }
-    let mut pacman = Vec::new();
+    let mut package_ids = Vec::new();
     let mut flatpak = Vec::new();
     for row in selected.lines() {
         let Some(package) = parse_package_row(row) else {
             continue;
         };
-        match package.source {
-            PackageSource::Flatpak => {
-                flatpak.push(package.name);
-            }
-            PackageSource::Pacman | PackageSource::Aur => {
-                pacman.push(package.name);
-            }
+        let (backend, kind) = match package.source {
+            PackageSource::Pacman => (
+                if helper == "yay" {
+                    BackendId::Yay
+                } else {
+                    BackendId::Paru
+                },
+                PackageKind::Aur,
+            ),
+            PackageSource::Aur => (
+                if helper == "yay" {
+                    BackendId::Yay
+                } else {
+                    BackendId::Paru
+                },
+                PackageKind::Aur,
+            ),
+            PackageSource::Flatpak => (BackendId::Flatpak, PackageKind::Flatpak),
+        };
+        let scope = if package.source == PackageSource::Pacman
+            || (package.source == PackageSource::Flatpak
+                && package.repository.as_deref() == Some("flatpak@system"))
+        {
+            PackageScope::System
+        } else {
+            PackageScope::User
+        };
+        let identity =
+            PackageIdentity::new(backend, kind, scope, NativePackageKey::new(package.name)?);
+        if package.source == PackageSource::Flatpak {
+            flatpak.push(identity);
+        } else {
+            package_ids.push(identity);
         }
     }
-    if !pacman.is_empty() {
-        execute_package(helper, TransactionAction::Remove, &pacman)?;
+    if !package_ids.is_empty() {
+        execute_package_typed(helper, TransactionAction::Remove, &package_ids)?;
     }
     if !flatpak.is_empty() && command_exists("flatpak") {
         execute_flatpak(&flatpak)?;
@@ -99,7 +125,8 @@ fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
         records.extend(typed_flatpak.into_iter().map(|package| {
             PackageRecord {
                 source: PackageSource::Flatpak,
-                repository: None,
+                repository: (package.scope == PackageScope::System)
+                    .then(|| "flatpak@system".to_owned()),
                 name: package.native_key.as_str().to_owned(),
                 listing: PackageListing::Flatpak {
                     app_name: package
