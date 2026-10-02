@@ -1,4 +1,8 @@
-use super::{PRIVILEGED_COMMAND_PATH, PrivilegeRunner, debug_timing_line, debug_timings_enabled};
+use super::{
+    PRIVILEGED_COMMAND_PATH, PrivilegeRunner, debug_timing_line, debug_timings_enabled,
+    run_command_plan,
+};
+use crate::{CommandPlan, CommandPrivilege};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
@@ -181,4 +185,59 @@ fn privilege_runner_propagates_sudo_failure() {
     // Then the nonzero sudo result remains an error
     assert!(result.is_err());
     fs::remove_dir_all(fixture).expect("remove failure fixture");
+}
+
+#[test]
+fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
+    let fixture = std::env::temp_dir().join(format!(
+        "system-tools-core-command-plan-runner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&fixture);
+    fs::create_dir_all(&fixture).expect("create command plan fixture");
+    let user_log = fixture.join("user.log");
+    let user_program = fixture.join("fake-tool");
+    write_executable(
+        &user_program,
+        &format!(
+            "#!/bin/sh\nprintf 'LC_ALL=%s\nLD_PRELOAD=%s\n' \"${{LC_ALL-<unset>}}\" \"${{LD_PRELOAD-<unset>}}\" > '{}'\nprintf '%s\n' \"$@\" >> '{}'\n",
+            user_log.display(),
+            user_log.display()
+        ),
+    );
+    let user_plan = CommandPlan::new(user_program.clone())
+        .arg("--fixed")
+        .arg("value")
+        .with_env_remove("LD_PRELOAD")
+        .with_locale("C");
+    run_command_plan(&user_plan).expect("run user command plan");
+    assert_eq!(
+        fs::read_to_string(&user_log).expect("read user command log"),
+        "LC_ALL=C\nLD_PRELOAD=<unset>\n--fixed\nvalue\n"
+    );
+    assert!(user_plan.program.is_absolute());
+
+    let trusted = fixture.join("trusted");
+    let elevated_log = fixture.join("elevated.log");
+    fs::create_dir(&trusted).expect("create trusted sudo fixture");
+    write_executable(
+        &trusted.join("sudo"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > '{}'\n",
+            elevated_log.display()
+        ),
+    );
+    let runner = PrivilegeRunner::from_search_path(trusted.as_os_str()).expect("trusted sudo");
+    let elevated_plan = CommandPlan::new(user_program)
+        .arg("--elevated")
+        .with_privilege(CommandPrivilege::Elevated)
+        .with_locale("C");
+    runner
+        .run_plan(&elevated_plan)
+        .expect("run elevated command plan");
+    assert_eq!(
+        fs::read_to_string(elevated_log).expect("read elevated command log"),
+        format!("{}\n--elevated\n", elevated_plan.program.display())
+    );
+    fs::remove_dir_all(fixture).expect("remove command plan fixture");
 }
