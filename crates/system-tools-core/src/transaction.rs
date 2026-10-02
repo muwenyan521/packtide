@@ -4,10 +4,12 @@ use std::process::ExitStatus;
 use crate::{run_privileged, run_status};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PackageUpgradePrivilege {
+pub enum CommandPrivilege {
     Elevated,
     User,
 }
+
+pub type PackageUpgradePrivilege = CommandPrivilege;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PackageUpgradeCommand<'a> {
