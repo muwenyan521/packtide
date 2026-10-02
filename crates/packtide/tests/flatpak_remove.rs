@@ -647,7 +647,14 @@ fn install_preview_covers_success_empty_and_failure_states() {
     ];
     for (label, body, expected_success, expected_text) in cases {
         let fixture = Fixture::new();
-        fixture.write_executable("paru", &format!("#!/bin/sh\n{body}\n"));
+        let invocations = fixture.path().join("paru.invocations");
+        fixture.write_executable(
+            "paru",
+            &format!(
+                "#!/bin/sh\nprintf 'invocation\\n' >> '{}'\n{body}\n",
+                invocations.display()
+            ),
+        );
         let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
             .expect("build isolated PATH");
         let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
@@ -663,6 +670,25 @@ fn install_preview_covers_success_empty_and_failure_states() {
             stdout.contains(expected_text),
             "case={label} stdout={stdout}"
         );
+        assert_eq!(
+            fs::read_to_string(invocations)
+                .expect("read fake helper invocation log")
+                .lines()
+                .count(),
+            1,
+            "case={label} should execute the details command exactly once"
+        );
+        if label == "success" {
+            assert!(
+                stdout.contains("\x1b[1;36mName\x1b[0m : bash"),
+                "case={label} stdout={stdout}"
+            );
+        } else if label == "failure" {
+            assert!(
+                stdout.contains("lookup failed"),
+                "case={label} should preserve details stderr: {stdout}"
+            );
+        }
     }
 }
 
