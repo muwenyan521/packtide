@@ -1,7 +1,10 @@
 use anyhow::Result;
 use std::env;
 use std::time::{Instant, SystemTime};
-use system_tools_core::{PackageSource, TransactionAction, command_exists, run_capture_path};
+use system_tools_core::{
+    BackendId, BuiltinBackend, PackageBackend, PackageSource, ReadOperation, TransactionAction,
+    command_exists, run_capture_path,
+};
 
 use crate::sources::{flatpak_rows, parse_remove_rows};
 use crate::transaction::{execute_flatpak, execute_package};
@@ -74,6 +77,25 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
 }
 
 fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
+    let typed_installed = BuiltinBackend::new(BackendId::Pacman)
+        .read(ReadOperation::Installed)
+        .map_err(|error| anyhow::anyhow!("pacman typed installed read failed: {error}"))?;
+    let typed_installed_names = typed_installed
+        .packages
+        .iter()
+        .map(|package| package.native_key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let typed_flatpak_ids = if command_exists("flatpak") {
+        BuiltinBackend::new(BackendId::Flatpak)
+            .read(ReadOperation::Installed)
+            .map_err(|error| anyhow::anyhow!("Flatpak typed installed read failed: {error}"))?
+            .packages
+            .into_iter()
+            .map(|package| package.native_key.as_str().to_owned())
+            .collect::<std::collections::HashSet<_>>()
+    } else {
+        std::collections::HashSet::new()
+    };
     let pacman_for_installed = pacman.to_path_buf();
     let pacman_for_sync = pacman.to_path_buf();
     let (installed, repo_names, flatpak) = std::thread::scope(|scope| -> Result<_> {
@@ -101,5 +123,13 @@ fn rows(pacman: &std::path::Path) -> Result<Vec<crate::model::PackageRecord>> {
                 .map_err(|_| anyhow::anyhow!("Flatpak query thread panicked"))??,
         ))
     })?;
-    Ok(parse_remove_rows(&installed, &repo_names, &flatpak))
+    Ok(parse_remove_rows(&installed, &repo_names, &flatpak)
+        .into_iter()
+        .filter(|record| match record.source {
+            PackageSource::Flatpak => typed_flatpak_ids.contains(&record.name),
+            PackageSource::Pacman | PackageSource::Aur => {
+                typed_installed_names.contains(record.name.as_str())
+            }
+        })
+        .collect())
 }

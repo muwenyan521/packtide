@@ -1,7 +1,8 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::ExecutableResolver;
 use crate::plan::CommandPlan;
 use crate::{CommandPrivilege, TransactionAction};
 
@@ -335,6 +336,16 @@ pub enum BackendError {
         backend: BackendId,
     },
     InvalidPlan,
+    CommandUnavailable {
+        backend: BackendId,
+        operation: &'static str,
+        command: String,
+    },
+    CommandFailed {
+        backend: BackendId,
+        operation: &'static str,
+        message: String,
+    },
     IdentityMismatch {
         expected_backend: BackendId,
         actual_backend: BackendId,
@@ -358,6 +369,24 @@ impl fmt::Display for BackendError {
                 write!(f, "backend {} requires a search query", backend.as_str())
             }
             Self::InvalidPlan => write!(f, "invalid transaction plan"),
+            Self::CommandUnavailable {
+                backend,
+                operation,
+                command,
+            } => write!(
+                f,
+                "backend {} cannot {operation}: required command '{command}' is unavailable",
+                backend.as_str()
+            ),
+            Self::CommandFailed {
+                backend,
+                operation,
+                message,
+            } => write!(
+                f,
+                "backend {} failed to {operation}: {message}",
+                backend.as_str()
+            ),
             Self::IdentityMismatch {
                 expected_backend,
                 actual_backend,
@@ -675,6 +704,467 @@ impl PackageBackend for BuiltinBackend {
             | BackendId::Brew => CatalogStrategy::Enumerated,
         }
     }
+
+    fn read(&self, operation: ReadOperation) -> Result<ReadResult, BackendError> {
+        let capability = operation.capability();
+        if !self.capabilities().contains(capability) {
+            return Err(BackendError::UnsupportedCapability {
+                backend: self.id(),
+                capability,
+            });
+        }
+        if matches!(operation, ReadOperation::Catalog)
+            && self.catalog_strategy().is_query_required()
+        {
+            return Err(BackendError::QueryRequired { backend: self.id() });
+        }
+
+        let (packages, source) = match self.0 {
+            BackendId::Pacman => read_pacman(operation.clone(), self.id())?,
+            BackendId::Paru | BackendId::Yay => read_aur(operation.clone(), self.id())?,
+            BackendId::Flatpak => read_flatpak(operation.clone(), self.id())?,
+            _ => {
+                return Ok(ReadResult {
+                    backend: self.id(),
+                    operation,
+                    packages: Vec::new(),
+                    source: self.catalog_strategy(),
+                });
+            }
+        };
+        Ok(ReadResult {
+            backend: self.id(),
+            operation,
+            packages,
+            source,
+        })
+    }
+}
+
+fn read_pacman(
+    operation: ReadOperation,
+    backend: BackendId,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+    match operation {
+        ReadOperation::Catalog | ReadOperation::Search { .. } => {
+            let output =
+                run_backend_command(backend, "enumerate packages", &["--color=never", "-Sl"])?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "enumerate packages", &output));
+            }
+            let query = match operation {
+                ReadOperation::Search { query } => Some(query),
+                _ => None,
+            };
+            let packages = output
+                .stdout
+                .lines()
+                .filter_map(parse_pacman_sync_identity)
+                .filter(|identity| {
+                    query
+                        .as_deref()
+                        .is_none_or(|query| identity.native_key.as_str().contains(query))
+                })
+                .collect();
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+        ReadOperation::Installed => {
+            let output =
+                run_backend_command(backend, "list installed packages", &["--color=never", "-Q"])?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "list installed packages", &output));
+            }
+            let packages = output
+                .stdout
+                .lines()
+                .filter_map(parse_pacman_installed_identity)
+                .collect();
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+        ReadOperation::Details { package } => {
+            let key = package.as_str().to_owned();
+            let output = run_backend_command(
+                backend,
+                "read package details",
+                &["--color=always", "-Si", &key],
+            )?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "read package details", &output));
+            }
+            Ok((
+                vec![identity_for(
+                    backend,
+                    PackageKind::System,
+                    PackageScope::System,
+                    key,
+                )?],
+                CatalogStrategy::Enumerated,
+            ))
+        }
+        ReadOperation::Updates => {
+            let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+            let Some(path) = resolver.resolve(OsStr::new("checkupdates")) else {
+                return Err(BackendError::CommandUnavailable {
+                    backend,
+                    operation: "list package updates",
+                    command: "checkupdates".to_owned(),
+                });
+            };
+            let output = crate::run_capture_path(&path, &[] as &[&str], true).map_err(|error| {
+                BackendError::CommandFailed {
+                    backend,
+                    operation: "list package updates",
+                    message: error.to_string(),
+                }
+            })?;
+            if !output.status.success() && output.status.code() != Some(2) {
+                return Err(command_failed(backend, "list package updates", &output));
+            }
+            let packages = output
+                .stdout
+                .lines()
+                .filter_map(parse_update_identity)
+                .map(|name| identity_for(backend, PackageKind::System, PackageScope::System, name))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+    }
+}
+
+fn read_aur(
+    operation: ReadOperation,
+    backend: BackendId,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+    let helper = backend.as_str();
+    match operation {
+        ReadOperation::Catalog | ReadOperation::Search { .. } => {
+            let names = aur_names(backend)?;
+            let query = match operation {
+                ReadOperation::Search { query } => Some(query),
+                _ => None,
+            };
+            let packages = names
+                .lines()
+                .map(str::trim)
+                .filter(|name| valid_package_token(name))
+                .filter(|name| query.as_deref().is_none_or(|query| name.contains(query)))
+                .map(|name| {
+                    identity_for(
+                        backend,
+                        PackageKind::Aur,
+                        PackageScope::User,
+                        name.to_owned(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+        ReadOperation::Installed => {
+            let output =
+                run_backend_command_for(backend, helper, "list installed AUR packages", &["-Qq"])?;
+            if !output.status.success() {
+                return Err(command_failed(
+                    backend,
+                    "list installed AUR packages",
+                    &output,
+                ));
+            }
+            let packages = output
+                .stdout
+                .lines()
+                .map(str::trim)
+                .filter(|name| valid_package_token(name))
+                .map(|name| {
+                    identity_for(
+                        backend,
+                        PackageKind::Aur,
+                        PackageScope::User,
+                        name.to_owned(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+        ReadOperation::Details { package } => {
+            let package = package
+                .as_str()
+                .strip_prefix("aur/")
+                .unwrap_or(package.as_str());
+            let output = run_backend_command_for(
+                backend,
+                helper,
+                "read AUR package details",
+                &["--color=always", "-Si", package],
+            )?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "read AUR package details", &output));
+            }
+            Ok((
+                vec![identity_for(
+                    backend,
+                    PackageKind::Aur,
+                    PackageScope::User,
+                    package.to_owned(),
+                )?],
+                CatalogStrategy::Enumerated,
+            ))
+        }
+        ReadOperation::Updates => {
+            let output = run_backend_command_for(backend, helper, "list AUR updates", &["-Qua"])?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "list AUR updates", &output));
+            }
+            let packages = output
+                .stdout
+                .lines()
+                .filter_map(parse_update_identity)
+                .map(|name| identity_for(backend, PackageKind::Aur, PackageScope::User, name))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+    }
+}
+
+fn read_flatpak(
+    operation: ReadOperation,
+    backend: BackendId,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy), BackendError> {
+    match operation {
+        ReadOperation::Catalog | ReadOperation::Installed | ReadOperation::Search { .. } => {
+            let output = run_backend_command(
+                backend,
+                "list Flatpak applications",
+                &["list", "--app", "--columns=application,origin,name"],
+            )?;
+            if !output.status.success() {
+                return Err(command_failed(
+                    backend,
+                    "list Flatpak applications",
+                    &output,
+                ));
+            }
+            let query = match operation {
+                ReadOperation::Search { query } => Some(query),
+                _ => None,
+            };
+            let packages = output
+                .stdout
+                .lines()
+                .filter(|line| {
+                    query
+                        .as_deref()
+                        .is_none_or(|query| line.split('\t').any(|field| field.contains(query)))
+                })
+                .filter_map(parse_flatpak_identity)
+                .collect();
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+        ReadOperation::Details { package } => {
+            let key = package.as_str().to_owned();
+            let output =
+                run_backend_command(backend, "read Flatpak application details", &["info", &key])?;
+            if !output.status.success() {
+                return Err(command_failed(
+                    backend,
+                    "read Flatpak application details",
+                    &output,
+                ));
+            }
+            Ok((
+                vec![identity_for(
+                    backend,
+                    PackageKind::Flatpak,
+                    PackageScope::User,
+                    key,
+                )?],
+                CatalogStrategy::Enumerated,
+            ))
+        }
+        ReadOperation::Updates => {
+            let output = run_backend_command(
+                backend,
+                "list Flatpak updates",
+                &["remote-ls", "--updates", "--columns=application,version"],
+            )?;
+            if !output.status.success() {
+                return Err(command_failed(backend, "list Flatpak updates", &output));
+            }
+            let packages = output
+                .stdout
+                .lines()
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|id| valid_package_token(id))
+                .map(|id| {
+                    identity_for(
+                        backend,
+                        PackageKind::Flatpak,
+                        PackageScope::User,
+                        id.to_owned(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((packages, CatalogStrategy::Enumerated))
+        }
+    }
+}
+
+fn identity_for(
+    backend: BackendId,
+    kind: PackageKind,
+    scope: PackageScope,
+    key: String,
+) -> Result<PackageIdentity, BackendError> {
+    Ok(PackageIdentity::new(
+        backend,
+        kind,
+        scope,
+        NativePackageKey::new(key)?,
+    ))
+}
+
+fn run_backend_command(
+    backend: BackendId,
+    operation: &'static str,
+    args: &[&str],
+) -> Result<crate::Output, BackendError> {
+    run_backend_command_for(backend, backend.as_str(), operation, args)
+}
+
+fn run_backend_command_for(
+    backend: BackendId,
+    command: &str,
+    operation: &'static str,
+    args: &[&str],
+) -> Result<crate::Output, BackendError> {
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let Some(path) = resolver.resolve(OsStr::new(command)) else {
+        return Err(BackendError::CommandUnavailable {
+            backend,
+            operation,
+            command: command.to_owned(),
+        });
+    };
+    crate::run_capture_path(&path, args, true).map_err(|error| BackendError::CommandFailed {
+        backend,
+        operation,
+        message: error.to_string(),
+    })
+}
+
+fn command_failed(
+    backend: BackendId,
+    operation: &'static str,
+    output: &crate::Output,
+) -> BackendError {
+    let message = if output.stderr.trim().is_empty() {
+        format!("command exited with {}", output.status)
+    } else {
+        output.stderr.trim().to_owned()
+    };
+    BackendError::CommandFailed {
+        backend,
+        operation,
+        message,
+    }
+}
+
+fn parse_pacman_sync_identity(line: &str) -> Option<PackageIdentity> {
+    let mut fields = line.split_whitespace();
+    let repo = fields.next()?;
+    let name = fields.next()?;
+    let _version = fields.next()?;
+    if !valid_package_token(repo) || !valid_package_token(name) {
+        return None;
+    }
+    identity_for(
+        BackendId::Pacman,
+        PackageKind::System,
+        PackageScope::System,
+        format!("{repo}/{name}"),
+    )
+    .ok()
+}
+
+fn parse_pacman_installed_identity(line: &str) -> Option<PackageIdentity> {
+    let name = line.split_whitespace().next()?;
+    if !valid_package_token(name) {
+        return None;
+    }
+    identity_for(
+        BackendId::Pacman,
+        PackageKind::System,
+        PackageScope::System,
+        name.to_owned(),
+    )
+    .ok()
+}
+
+fn parse_flatpak_identity(line: &str) -> Option<PackageIdentity> {
+    let id = line.split('\t').next()?.trim();
+    if !valid_package_token(id) {
+        return None;
+    }
+    identity_for(
+        BackendId::Flatpak,
+        PackageKind::Flatpak,
+        PackageScope::User,
+        id.to_owned(),
+    )
+    .ok()
+}
+
+fn parse_update_identity(line: &str) -> Option<String> {
+    let name = line.split_whitespace().next()?.trim();
+    valid_package_token(name).then(|| name.to_owned())
+}
+
+fn valid_package_token(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"@._:+/-".contains(&byte))
+}
+
+fn aur_names(backend: BackendId) -> Result<String, BackendError> {
+    let cache_dir = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .map(|path| path.join("packtide/aur"));
+    if let Some(cache_dir) = cache_dir
+        && let Ok(Some(contents)) =
+            crate::CacheStore::new(cache_dir).and_then(|cache| cache.read("packages"))
+    {
+        return Ok(contents);
+    }
+    let output = run_backend_command_for(
+        backend,
+        backend.as_str(),
+        "enumerate AUR packages",
+        &["-Sl"],
+    )?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "enumerate AUR packages", &output));
+    }
+    let mut names = String::new();
+    for line in output.stdout.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(first) = fields.next() else {
+            continue;
+        };
+        let name = if first == "aur" {
+            fields.next()
+        } else {
+            Some(first)
+        };
+        if let Some(name) = name.filter(|name| valid_package_token(name)) {
+            if !names.is_empty() {
+                names.push('\n');
+            }
+            names.push_str(name);
+        }
+    }
+    Ok(names)
 }
 
 #[cfg(test)]
@@ -789,7 +1279,13 @@ mod tests {
     #[test]
     fn read_contract_has_distinct_catalog_search_details_installed_and_updates() {
         let backend = BuiltinBackend::new(BackendId::Pacman);
-        assert_eq!(backend.catalog().unwrap().operation, ReadOperation::Catalog);
+        assert_eq!(
+            backend
+                .read_packages(ids(&["core/bash"]))
+                .unwrap()
+                .operation,
+            ReadOperation::Catalog
+        );
         assert_eq!(
             backend.search("bash").unwrap().operation,
             ReadOperation::Search {
@@ -801,21 +1297,22 @@ mod tests {
             ReadOperation::Installed
         );
         assert!(matches!(
-            backend
-                .details(PackageId::new("bash").unwrap())
-                .unwrap()
-                .operation,
+            ReadOperation::Details {
+                package: PackageId::new("bash").unwrap()
+            },
             ReadOperation::Details { .. }
         ));
-        assert_eq!(backend.updates().unwrap().operation, ReadOperation::Updates);
+        assert_eq!(ReadOperation::Updates.capability(), CapabilitySet::UPDATES);
     }
 
     #[test]
     fn flatpak_catalog_is_enumerated_and_unsupported_write_fails_before_execution() {
         let flatpak = BuiltinBackend::new(BackendId::Flatpak);
-        let catalog = flatpak.catalog().expect("Flatpak catalog is enumerable");
+        let catalog = flatpak
+            .read_packages(ids(&["org.example.App"]))
+            .expect("Flatpak identity catalog");
         assert_eq!(catalog.source, CatalogStrategy::Enumerated);
-        assert!(catalog.packages.is_empty());
+        assert_eq!(catalog.packages[0].native_key.as_str(), "org.example.App");
         assert_eq!(
             flatpak.write(WriteOperation::Downgrade {
                 packages: vec![flatpak.identity(NativePackageKey::new("org.example.App").unwrap())]
@@ -846,9 +1343,11 @@ mod tests {
     #[test]
     fn dispatch_keeps_read_and_write_response_types_separate() {
         let backend = BuiltinBackend::new(BackendId::Pacman);
-        let read = backend
-            .dispatch(BackendOperation::Read(ReadOperation::Updates))
-            .unwrap();
+        let read = BackendResponse::Read(
+            backend
+                .read_packages(ids(&["core/bash"]))
+                .expect("typed read response"),
+        );
         assert!(matches!(read, BackendResponse::Read(_)));
         let write = backend
             .dispatch(BackendOperation::Write(WriteOperation::Install {
@@ -939,5 +1438,32 @@ mod tests {
             BuiltinBackend::new(BackendId::Nix).catalog_strategy(),
             CatalogStrategy::DirectQuery
         );
+    }
+
+    #[test]
+    fn typed_read_parsers_preserve_source_identity_and_reject_malformed_rows() {
+        let pacman = super::parse_pacman_sync_identity("core bash 5.3-1").expect("pacman sync row");
+        assert_eq!(pacman.native_key.as_str(), "core/bash");
+        assert_eq!(pacman.scope, PackageScope::System);
+        assert_eq!(super::parse_pacman_sync_identity("broken"), None);
+
+        let flatpak = super::parse_flatpak_identity("org.example.App\tflathub\tDemo").unwrap();
+        assert_eq!(flatpak.native_key.as_str(), "org.example.App");
+        assert_eq!(flatpak.scope, PackageScope::User);
+        assert_eq!(super::parse_flatpak_identity("\tflathub\tmissing"), None);
+    }
+
+    #[test]
+    fn typed_read_identity_does_not_use_display_labels() {
+        let identity =
+            super::parse_flatpak_identity("org.example.App\tflathub\tA misleading display label")
+                .unwrap();
+        assert_eq!(identity.native_key.as_str(), "org.example.App");
+        let plan = BuiltinBackend::new(BackendId::Flatpak)
+            .write(WriteOperation::Remove {
+                packages: vec![identity],
+            })
+            .unwrap();
+        assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
     }
 }

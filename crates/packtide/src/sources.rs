@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
+use system_tools_core::{BackendId, BuiltinBackend, PackageBackend, ReadOperation};
 
 #[cfg(test)]
 pub(crate) use pacman::parse_install_rows;
@@ -31,6 +32,14 @@ pub(crate) fn install_rows_streaming(
     mut write_official: impl FnMut(&PackageRecord) -> Result<()>,
 ) -> Result<InstallCatalog> {
     let started = Instant::now();
+    let typed_catalog = BuiltinBackend::new(BackendId::Pacman)
+        .read(ReadOperation::Catalog)
+        .map_err(|error| anyhow::anyhow!("pacman catalog exited: typed read failed: {error}"))?;
+    let typed_official = typed_catalog
+        .packages
+        .iter()
+        .map(|package| package.native_key.as_str().to_owned())
+        .collect::<HashSet<_>>();
     let installed_child = Command::new(pacman)
         .args(["-Qq"])
         .stdout(Stdio::piped())
@@ -88,6 +97,15 @@ pub(crate) fn install_rows_streaming(
         let Some(record) = pacman::parse_install_line(&line, &catalog.installed) else {
             continue;
         };
+        if !typed_official.contains(
+            &record
+                .repository
+                .as_deref()
+                .map(|repository| format!("{repository}/{}", record.name))
+                .unwrap_or_else(|| record.name.clone()),
+        ) {
+            continue;
+        }
         write_official(&record)?;
         catalog.official_names.insert(record.name.clone());
         if retain_official {
@@ -98,7 +116,28 @@ pub(crate) fn install_rows_streaming(
     if !status.success() {
         anyhow::bail!("pacman catalog exited with {status}");
     }
-    catalog.aur_names = aur::fetch_names_for_picker(refresh, false).unwrap_or_default();
+    catalog.aur_names = aur::fetch_names_for_picker(refresh, false)?;
+    if !catalog.aur_names.trim().is_empty() {
+        let aur_backend = if system_tools_core::command_exists("paru") {
+            BackendId::Paru
+        } else {
+            BackendId::Yay
+        };
+        let typed_aur = BuiltinBackend::new(aur_backend)
+            .read(ReadOperation::Catalog)
+            .map_err(|error| anyhow::anyhow!("AUR catalog exited: typed read failed: {error}"))?;
+        let typed_aur_names = typed_aur
+            .packages
+            .iter()
+            .map(|package| package.native_key.as_str())
+            .collect::<HashSet<_>>();
+        catalog.aur_names = catalog
+            .aur_names
+            .lines()
+            .filter(|name| typed_aur_names.contains(*name))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
             "source_timing source=install_rows elapsed_ms={}",

@@ -6,7 +6,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::time::Instant;
 use system_tools_core::{
-    CacheStore, ExecutableResolver, PackageSource, current_executable, run_capture_path,
+    BackendId, BuiltinBackend, CacheStore, ExecutableResolver, PackageBackend, PackageSource,
+    ReadOperation, current_executable, run_capture_path,
 };
 
 use crate::commands::sysup;
@@ -230,9 +231,21 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
     if let Some(checkupdates) = resolver.resolve(std::ffi::OsStr::new("checkupdates")) {
         let started = Instant::now();
+        let typed = BuiltinBackend::new(BackendId::Pacman)
+            .read(ReadOperation::Updates)
+            .ok()?;
+        let typed_names = typed
+            .packages
+            .iter()
+            .map(|package| package.native_key.as_str())
+            .collect::<HashSet<_>>();
         let output = run_capture_path(&checkupdates, &[] as &[&str], true).ok()?;
         if output.status.success() {
-            updates.extend(parse_updates(PackageSource::Pacman, &output.stdout));
+            updates.extend(
+                parse_updates(PackageSource::Pacman, &output.stdout)
+                    .into_iter()
+                    .filter(|item| typed_names.contains(item.name.as_str())),
+            );
         } else if output.status.code() != Some(2) {
             return None;
         }
@@ -243,11 +256,28 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         .or_else(|| resolver.resolve(std::ffi::OsStr::new("yay")));
     if let Some(helper) = helper {
         let started = Instant::now();
+        let backend = if helper.file_name().is_some_and(|name| name == "yay") {
+            BackendId::Yay
+        } else {
+            BackendId::Paru
+        };
+        let typed = BuiltinBackend::new(backend)
+            .read(ReadOperation::Updates)
+            .ok()?;
+        let typed_names = typed
+            .packages
+            .iter()
+            .map(|package| package.native_key.as_str())
+            .collect::<HashSet<_>>();
         let output = run_capture_path(&helper, &["-Qua"], true).ok()?;
         if !output.status.success() {
             return None;
         }
-        updates.extend(parse_updates(PackageSource::Aur, &output.stdout));
+        updates.extend(
+            parse_updates(PackageSource::Aur, &output.stdout)
+                .into_iter()
+                .filter(|item| typed_names.contains(item.name.as_str())),
+        );
         debug_source_timing("aur_updates", started);
     }
     Some(updates)
@@ -259,14 +289,28 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
     let updates = resolver
         .resolve(std::ffi::OsStr::new("flatpak"))
         .and_then(|flatpak| {
+            let typed = BuiltinBackend::new(BackendId::Flatpak)
+                .read(ReadOperation::Updates)
+                .ok()?;
+            let typed_names = typed
+                .packages
+                .iter()
+                .map(|package| package.native_key.as_str().to_owned())
+                .collect::<HashSet<_>>();
             run_capture_path(
                 &flatpak,
                 &["remote-ls", "--updates", "--columns=application,version"],
                 true,
             )
             .ok()
+            .map(|output| (output, typed_names))
         })
-        .map(|output| parse_flatpak(&output.stdout))
+        .map(|(output, typed_names)| {
+            parse_flatpak(&output.stdout)
+                .into_iter()
+                .filter(|item| typed_names.contains(&item.name))
+                .collect()
+        })
         .unwrap_or_default();
     debug_source_timing("flatpak_updates", started);
     updates
