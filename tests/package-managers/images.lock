@@ -15,13 +15,37 @@ architecture = "amd64"
 package_manager = "apt"
 version = "2.6.1"
 
+[[image.ubuntu]]
+registry = "docker.io/library/ubuntu"
+tag = "24.04"
+manifest_digest = "sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b"
+architecture = "amd64"
+package_manager = "apt"
+version = "2.8.3"
+
 [[image.fedora]]
 registry = "registry.fedoraproject.org/fedora"
 tag = "41"
 manifest_digest = "sha256:3fb969dd07e631c17d12f5955bcb6db2078a6997eb68be76b6492e7bd6052e88"
 architecture = "amd64"
 package_manager = "dnf5"
-version = "5.2.0"
+version = "5.2.17.0"
+
+[[image.rocky]]
+registry = "docker.io/library/rockylinux"
+tag = "9"
+manifest_digest = "sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6"
+architecture = "amd64"
+package_manager = "dnf4"
+version = "4.14.0"
+
+[[image.alma]]
+registry = "docker.io/library/almalinux"
+tag = "9"
+manifest_digest = "sha256:3a3fa7f043b142bc8008c8b308d39b47d2c84008addcd52f9f9a7a82d2a90474"
+architecture = "amd64"
+package_manager = "dnf4"
+version = "4.14.0"
 
 [[image.opensuse]]
 registry = "registry.opensuse.org/opensuse/leap"
@@ -29,12 +53,12 @@ tag = "15.6"
 manifest_digest = "sha256:a783ee8a37eef5e06dfd44c715ff5a228dfce4328415e5bc5651c9d99a95045d"
 architecture = "amd64"
 package_manager = "zypper"
-version = "1.14.72"
+version = "1.14.94"
 
 [[image.void]]
-registry = "docker.io/voidlinux/voidlinux"
+registry = "docker.io/voidlinux/voidlinux-musl"
 tag = "latest"
-manifest_digest = "sha256:26ba972f0c06beadcec4796ec3037e0bec32af4d255edb68a528bd98304c74f4"
+manifest_digest = "sha256:d5c970d0015c3aa2559a2b5a87b158839969fbb1941a9ef52cc484a5392554cd"
 architecture = "amd64"
 package_manager = "xbps"
-version = "0.59.2"
+version = "0.59.1"

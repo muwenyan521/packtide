@@ -68,6 +68,27 @@ fn main() -> Result<()> {
             }
             probe_alpine(image.as_deref(), evidence.as_deref())
         }
+        "single" => {
+            let mut backend = None;
+            let mut evidence = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--backend" => backend = Some(args.next().context("--backend needs a value")?),
+                    "--evidence" => {
+                        evidence = Some(PathBuf::from(
+                            args.next().context("--evidence needs a value")?,
+                        ))
+                    }
+                    value => bail!("unknown single argument: {value}"),
+                }
+            }
+            probe_single(
+                backend.as_deref().context("single requires --backend")?,
+                evidence.as_deref(),
+            )
+        }
+        "verify-cloud-image" => verify_cloud_image_lock(),
+        "audit-cleanup" => audit_cleanup(),
         "all" => {
             let mut evidence = None;
             while let Some(arg) = args.next() {
@@ -81,7 +102,9 @@ fn main() -> Result<()> {
             }
             probe_all(evidence.as_deref())
         }
-        _ => bail!("usage: package-manager-matrix <doctor|list-images|probe-alpine|all> [options]"),
+        _ => bail!(
+            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|all> [options]"
+        ),
     }
 }
 
@@ -264,6 +287,39 @@ fn probe_alpine(requested: Option<&str>, evidence_path: Option<&Path>) -> Result
     Ok(())
 }
 
+fn probe_single(backend: &str, evidence_path: Option<&Path>) -> Result<()> {
+    let images = read_lock(Path::new(DEFAULT_LOCK))?;
+    let image = images
+        .iter()
+        .find(|image| image.name == backend)
+        .with_context(|| format!("backend {backend} is not present in image lock"))?;
+    validate_image(image).and_then(|_| verify_manifest(image))?;
+    let probe = match probe_command(&image.manager) {
+        Some(_) => probe_image(
+            image,
+            &image.digest,
+            Some(format!("{}@{}", image.registry, image.digest)),
+            "single-backend",
+        ),
+        None => unavailable_probe(
+            backend,
+            "container",
+            None,
+            format!("no executable probe for {}", image.manager),
+        ),
+    };
+    let json = render_probe(&probe);
+    write_evidence(evidence_path, &format!("{json}\n"))?;
+    println!("{json}");
+    if probe.status != 0 {
+        bail!(
+            "single backend {backend} failed with status {}",
+            probe.status
+        );
+    }
+    Ok(())
+}
+
 fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
     let images = read_lock(Path::new(DEFAULT_LOCK))?;
     let mut records = Vec::with_capacity(images.len() + 3);
@@ -384,6 +440,8 @@ fn probe_image(
         ),
         Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
     };
+    let package_manager_version =
+        parse_manager_version(&image.manager, &stdout).or_else(|| Some(image.version.clone()));
     ProbeOutput {
         lane: image.name.clone(),
         kind: "container",
@@ -393,7 +451,7 @@ fn probe_image(
         manifest_digest: Some(image.digest.clone()),
         architecture: Some(image.arch.clone()),
         package_manager: Some(image.manager.clone()),
-        package_manager_version: Some(image.version.clone()),
+        package_manager_version,
         elapsed_ms: started.elapsed().as_millis(),
         stdout: stdout.trim().into(),
         stderr: stderr.trim().into(),
@@ -463,7 +521,14 @@ fn vm_lane_probe() -> ProbeOutput {
             if command_version("cloud-init").is_none() {
                 missing.push("cloud-init");
             }
-            let reason = if missing.is_empty() {
+            let checksum = if missing.is_empty() {
+                verify_cloud_image(&image).err().map(|e| e.to_string())
+            } else {
+                None
+            };
+            let reason = if let Some(error) = checksum {
+                format!("Snap VM cloud image validation failed: {error}")
+            } else if missing.is_empty() {
                 format!(
                     "Snap VM orchestration is not implemented; locked cloud image {} is metadata-only",
                     image.url
@@ -480,6 +545,100 @@ fn vm_lane_probe() -> ProbeOutput {
         }
         Err(error) => failed_probe("snap-vm", "vm", None, error.to_string()),
     }
+}
+
+fn verify_cloud_image(image: &CloudImage) -> Result<()> {
+    let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
+    let result = (|| {
+        let status = Command::new("curl")
+            .args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--output",
+            ])
+            .arg(&path)
+            .arg(&image.url)
+            .status()
+            .context("download cloud image")?;
+        if !status.success() {
+            bail!("curl exited with {status}");
+        }
+        let output = Command::new("sha256sum")
+            .arg(&path)
+            .output()
+            .context("hash cloud image")?;
+        if !output.status.success() {
+            bail!("sha256sum exited with {}", output.status);
+        }
+        let hash_output = String::from_utf8_lossy(&output.stdout);
+        let actual = hash_output.split_whitespace().next().unwrap_or("");
+        if actual != image.sha256 {
+            bail!(
+                "cloud image sha256 mismatch: expected {}, got {actual}",
+                image.sha256
+            );
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_file(&path);
+    result
+}
+
+fn verify_cloud_image_lock() -> Result<()> {
+    let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
+    verify_cloud_image(&image)?;
+    println!(
+        "{{\"status\":\"pass\",\"url\":{},\"sha256\":{},\"cleanup\":true}}",
+        json_string(&image.url),
+        json_string(&image.sha256)
+    );
+    Ok(())
+}
+
+fn audit_cleanup() -> Result<()> {
+    let containers = Command::new("podman")
+        .args(["ps", "-a", "--format", "{{.Names}}"])
+        .output()
+        .context("inspect podman containers")?;
+    let leftovers: Vec<_> = String::from_utf8_lossy(&containers.stdout)
+        .lines()
+        .filter(|line| line.starts_with("pm-matrix-"))
+        .map(str::to_owned)
+        .collect();
+    let qemu = Command::new("pgrep")
+        .args(["-f", "qemu-system-x86_64.*pm-matrix"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    let temp_leftovers = fs::read_dir(std::env::temp_dir())
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.starts_with("pm-matrix-") || name.contains("qcow2"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let clean = leftovers.is_empty() && !qemu && temp_leftovers.is_empty();
+    println!(
+        "{{\"status\":{},\"containers\":{},\"qemu\":{},\"temp\":{},\"cleanup\":{}}}",
+        json_string(if clean { "pass" } else { "fail" }),
+        json_array(&leftovers.iter().map(String::as_str).collect::<Vec<_>>()),
+        qemu,
+        json_array(
+            &temp_leftovers
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        ),
+        clean
+    );
+    if !clean {
+        bail!("matrix resources remain after interrupted run");
+    }
+    Ok(())
 }
 
 fn render_probe(probe: &ProbeOutput) -> String {
@@ -623,6 +782,26 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "xbps" => Some(&["xbps-query", "--version"]),
         _ => None,
     }
+}
+
+fn parse_manager_version(manager: &str, stdout: &str) -> Option<String> {
+    let line = stdout.lines().find(|line| !line.trim().is_empty())?.trim();
+    let version = match manager {
+        "dnf5" => line.strip_prefix("dnf5 version "),
+        "dnf4" => line.split_whitespace().next(),
+        "zypper" => line.strip_prefix("zypper "),
+        "xbps" => line
+            .strip_prefix("XBPS: ")
+            .and_then(|v| v.split_whitespace().next()),
+        "apk" => line
+            .strip_prefix("apk-tools ")
+            .and_then(|v| v.split(',').next()),
+        "apt" => line
+            .strip_prefix("apt ")
+            .and_then(|v| v.split_whitespace().next()),
+        _ => None,
+    }?;
+    Some(version.to_string())
 }
 
 fn validate_image(image: &Image) -> Result<()> {
@@ -812,7 +991,7 @@ mod tests {
                 .as_path(),
         )
         .unwrap();
-        assert_eq!(images.len(), 5);
+        assert!(images.len() >= 8);
         for image in &images {
             validate_image(image).unwrap();
             assert!(probe_command(&image.manager).is_some(), "{}", image.name);
