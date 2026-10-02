@@ -250,9 +250,14 @@ impl CatalogStrategy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReadOperation {
     Catalog,
-    Search { query: String },
+    Search {
+        query: String,
+    },
     Installed,
-    Details { package: PackageId },
+    Details {
+        package: PackageId,
+        scope: PackageScope,
+    },
     Updates,
 }
 
@@ -464,7 +469,14 @@ pub trait PackageBackend {
             return Err(BackendError::QueryRequired { backend: self.id() });
         }
         let packages = match &operation {
-            ReadOperation::Details { package } => vec![self.identity(package.clone().into())],
+            ReadOperation::Details { package, scope } => {
+                vec![PackageIdentity::new(
+                    self.id(),
+                    self.kind(),
+                    *scope,
+                    package.clone(),
+                )]
+            }
             _ => Vec::new(),
         };
         Ok(ReadResult {
@@ -510,7 +522,10 @@ pub trait PackageBackend {
     }
 
     fn details(&self, package: PackageId) -> Result<ReadResult, BackendError> {
-        self.read(ReadOperation::Details { package })
+        self.read(ReadOperation::Details {
+            package,
+            scope: self.scope(),
+        })
     }
 
     fn updates(&self) -> Result<ReadResult, BackendError> {
@@ -539,10 +554,13 @@ pub trait PackageBackend {
         }
         let command = self.command_for_with_resolver(&operation, resolver)?;
         let packages = operation.packages().to_vec();
+        let scope = packages
+            .first()
+            .map_or(self.scope(), |package| package.scope);
         Ok(TransactionPlan {
             backend: self.id(),
             kind: self.kind(),
-            scope: self.scope(),
+            scope,
             operation,
             command,
             packages,
@@ -598,17 +616,22 @@ pub trait PackageBackend {
                 capability,
             });
         }
+        let expected_scope = operation
+            .packages()
+            .first()
+            .filter(|_| self.id() == BackendId::Flatpak)
+            .map_or(self.scope(), |package| package.scope);
         if let Some(package) = operation.packages().iter().find(|package| {
             package.backend != self.id()
                 || package.kind != self.kind()
-                || package.scope != self.scope()
+                || package.scope != expected_scope
         }) {
             return Err(BackendError::IdentityMismatch {
                 expected_backend: self.id(),
                 actual_backend: package.backend,
                 expected_kind: self.kind(),
                 actual_kind: package.kind,
-                expected_scope: self.scope(),
+                expected_scope,
                 actual_scope: package.scope,
             });
         }
@@ -624,7 +647,7 @@ pub trait PackageBackend {
             .with_env_remove("LD_PRELOAD")
             .with_env_remove("LD_LIBRARY_PATH")
             .with_locale("C")
-            .with_privilege(if self.scope() == PackageScope::System {
+            .with_privilege(if expected_scope == PackageScope::System {
                 CommandPrivilege::Elevated
             } else {
                 CommandPrivilege::User
@@ -646,6 +669,9 @@ pub trait PackageBackend {
             (_, WriteOperation::Downgrade { .. }) => "-U",
         };
         command.args.push(OsString::from(flag));
+        if self.id() == BackendId::Flatpak && expected_scope == PackageScope::System {
+            command.args.push(OsString::from("--system"));
+        }
         for package in operation.packages() {
             command
                 .args
@@ -849,7 +875,7 @@ fn read_pacman(
                 .collect();
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
-        ReadOperation::Details { package } => {
+        ReadOperation::Details { package, .. } => {
             let key = package.as_str();
             let qi = key.strip_prefix("detail-qi:").is_some();
             let key = key.strip_prefix("detail-qi:").unwrap_or(key);
@@ -962,7 +988,7 @@ fn read_aur(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
-        ReadOperation::Details { package } => {
+        ReadOperation::Details { package, .. } => {
             let qi = package.as_str().strip_prefix("detail-qi:").is_some();
             let package = package
                 .as_str()
@@ -1045,17 +1071,20 @@ fn read_flatpak(
                 .collect();
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
-        ReadOperation::Details { package } => {
+        ReadOperation::Details { package, scope } => {
             let key = package.as_str().to_owned();
-            let output =
-                run_backend_command(backend, "read Flatpak application details", &["info", &key])?;
+            let args = if scope == PackageScope::System {
+                vec!["info".to_owned(), "--system".to_owned(), key.clone()]
+            } else {
+                vec!["info".to_owned(), key.clone()]
+            };
+            let output = run_backend_command(
+                backend,
+                "read Flatpak application details",
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?;
             Ok((
-                vec![identity_for(
-                    backend,
-                    PackageKind::Flatpak,
-                    PackageScope::User,
-                    key,
-                )?],
+                vec![identity_for(backend, PackageKind::Flatpak, scope, key)?],
                 CatalogStrategy::Enumerated,
                 Some(ReadDetails {
                     stdout: output.stdout,
@@ -1417,6 +1446,24 @@ mod tests {
         assert!(plan.command.program.is_absolute());
         assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
         assert_eq!(plan.packages, vec![expected_identity]);
+
+        let system_identity = PackageIdentity::new(
+            BackendId::Flatpak,
+            PackageKind::Flatpak,
+            PackageScope::System,
+            NativePackageKey::new(APPLICATION_ID).unwrap(),
+        );
+        let system_plan = backend
+            .write(WriteOperation::Remove {
+                packages: vec![system_identity],
+            })
+            .expect("system Flatpak uninstall plan");
+        assert_eq!(system_plan.scope, PackageScope::System);
+        assert_eq!(
+            system_plan.command.args,
+            ["uninstall", "--system", APPLICATION_ID]
+        );
+        assert_eq!(system_plan.command.privilege, CommandPrivilege::Elevated);
     }
 
     #[test]
@@ -1441,7 +1488,8 @@ mod tests {
         );
         assert!(matches!(
             ReadOperation::Details {
-                package: PackageId::new("bash").unwrap()
+                package: PackageId::new("bash").unwrap(),
+                scope: PackageScope::System,
             },
             ReadOperation::Details { .. }
         ));

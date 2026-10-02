@@ -35,25 +35,48 @@ pub(crate) fn execute_package_typed(
     action: TransactionAction,
     packages: &[PackageIdentity],
 ) -> Result<()> {
-    let backend = match helper {
-        "paru" => BackendId::Paru,
-        "yay" => BackendId::Yay,
-        _ => anyhow::bail!(
-            "{}: unsupported AUR helper: {helper}",
-            crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
-        ),
-    };
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
-    let plan = BuiltinBackend::new(backend).write_with_resolver(
-        system_tools_core::WriteOperation::transaction(action, packages.to_vec()),
-        &resolver,
-    )?;
-    let targets = packages
-        .iter()
-        .map(|p| p.native_key.as_str())
-        .collect::<Vec<_>>();
-    print_summary(action.as_str(), helper, "helper-managed", &targets);
-    run_command_plan(&plan.command)?;
+    for backend in [BackendId::Pacman, BackendId::Paru, BackendId::Yay] {
+        let selected = packages
+            .iter()
+            .filter(|package| package.backend == backend)
+            .cloned()
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            continue;
+        }
+        let helper_name = match backend {
+            BackendId::Pacman => "pacman",
+            BackendId::Paru => "paru",
+            BackendId::Yay => "yay",
+            _ => unreachable!(),
+        };
+        if backend != BackendId::Pacman && helper_name != helper {
+            anyhow::bail!(
+                "{}: package identity requires {helper_name}, configured helper is {helper}",
+                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+            );
+        }
+        let plan = BuiltinBackend::new(backend).write_with_resolver(
+            system_tools_core::WriteOperation::transaction(action, selected.clone()),
+            &resolver,
+        )?;
+        let targets = selected
+            .iter()
+            .map(|p| p.native_key.as_str())
+            .collect::<Vec<_>>();
+        print_summary(
+            action.as_str(),
+            helper_name,
+            if backend == BackendId::Pacman {
+                "direct"
+            } else {
+                "helper-managed"
+            },
+            &targets,
+        );
+        run_command_plan(&plan.command)?;
+    }
     Ok(())
 }
 
