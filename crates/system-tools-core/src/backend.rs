@@ -492,6 +492,15 @@ pub trait PackageBackend {
     }
 
     fn write(&self, operation: WriteOperation) -> Result<TransactionPlan, BackendError> {
+        let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+        self.write_with_resolver(operation, &resolver)
+    }
+
+    fn write_with_resolver(
+        &self,
+        operation: WriteOperation,
+        resolver: &ExecutableResolver,
+    ) -> Result<TransactionPlan, BackendError> {
         let capability = operation.capability();
         if !self.capabilities().contains(capability) {
             return Err(BackendError::UnsupportedCapability {
@@ -502,7 +511,7 @@ pub trait PackageBackend {
         if !matches!(operation, WriteOperation::SystemUpgrade) && operation.packages().is_empty() {
             return Err(BackendError::InvalidPlan);
         }
-        let command = self.command_for(&operation)?;
+        let command = self.command_for_with_resolver(&operation, resolver)?;
         let packages = operation.packages().to_vec();
         Ok(TransactionPlan {
             backend: self.id(),
@@ -526,6 +535,19 @@ pub trait PackageBackend {
         self.write(WriteOperation::transaction(action, identities))
     }
 
+    fn transaction_with_resolver(
+        &self,
+        action: TransactionAction,
+        packages: Vec<PackageId>,
+        resolver: &ExecutableResolver,
+    ) -> Result<TransactionPlan, BackendError> {
+        let identities = packages
+            .into_iter()
+            .map(|package| self.identity(package.into()))
+            .collect();
+        self.write_with_resolver(WriteOperation::transaction(action, identities), resolver)
+    }
+
     fn dispatch(&self, operation: BackendOperation) -> Result<BackendResponse, BackendError> {
         match operation {
             BackendOperation::Read(operation) => self.read(operation).map(BackendResponse::Read),
@@ -534,6 +556,15 @@ pub trait PackageBackend {
     }
 
     fn command_for(&self, operation: &WriteOperation) -> Result<CommandPlan, BackendError> {
+        let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+        self.command_for_with_resolver(operation, &resolver)
+    }
+
+    fn command_for_with_resolver(
+        &self,
+        operation: &WriteOperation,
+        resolver: &ExecutableResolver,
+    ) -> Result<CommandPlan, BackendError> {
         let capability = operation.capability();
         if !self.capabilities().contains(capability) {
             return Err(BackendError::UnsupportedCapability {
@@ -555,8 +586,17 @@ pub trait PackageBackend {
                 actual_scope: package.scope,
             });
         }
-        let mut command = CommandPlan::new(PathBuf::from(self.id().as_str()))
+        let program = resolver
+            .resolve(OsStr::new(self.id().as_str()))
+            .ok_or_else(|| BackendError::CommandUnavailable {
+                backend: self.id(),
+                operation: "write transaction",
+                command: self.id().as_str().to_owned(),
+            })?;
+        let mut command = CommandPlan::new(program)
             .with_backend(self.id())
+            .with_env_remove("LD_PRELOAD")
+            .with_env_remove("LD_LIBRARY_PATH")
             .with_locale("C")
             .with_privilege(if self.scope() == PackageScope::System {
                 CommandPrivilege::Elevated
@@ -571,7 +611,7 @@ pub trait PackageBackend {
             | (BackendId::Flatpak, WriteOperation::SystemUpgrade) => {
                 return Err(BackendError::UnsupportedCapability {
                     backend: self.id(),
-                    capability: CapabilitySet::DOWNGRADE,
+                    capability: operation.capability(),
                 });
             }
             (_, WriteOperation::Install { .. }) => "-S",
@@ -1187,10 +1227,22 @@ mod tests {
     fn all_declared_backend_and_kind_variants_have_explicit_identity_metadata() {
         for backend in BackendId::ALL {
             let builtin = BuiltinBackend::new(backend);
-            assert!(matches!(
-                builtin.class(),
-                BackendClass::Native | BackendClass::Optional
-            ));
+            let expected_class = match backend {
+                BackendId::Pacman
+                | BackendId::Apt
+                | BackendId::Dnf5
+                | BackendId::Dnf4
+                | BackendId::Zypper
+                | BackendId::Apk
+                | BackendId::Xbps => BackendClass::Native,
+                BackendId::Paru
+                | BackendId::Yay
+                | BackendId::Flatpak
+                | BackendId::Snap
+                | BackendId::Brew
+                | BackendId::Nix => BackendClass::Optional,
+            };
+            assert_eq!(builtin.class(), expected_class);
             assert!(PackageKind::ALL.contains(&builtin.kind()));
             assert!(PackageScope::ALL.contains(&builtin.scope()));
         }
@@ -1243,7 +1295,7 @@ mod tests {
             .expect("paru remove plan");
         assert_eq!(plan.scope, PackageScope::User);
         assert_eq!(plan.kind, PackageKind::Aur);
-        assert_eq!(plan.command.program.to_string_lossy(), "paru");
+        assert!(plan.command.program.is_absolute());
         assert_eq!(plan.command.args, ["-Rns", "aur/tool"]);
         assert_eq!(
             plan.command.locale.as_deref(),
@@ -1251,6 +1303,40 @@ mod tests {
         );
         assert_eq!(plan.command.privilege, CommandPrivilege::User);
         assert_eq!(plan.packages[0].native_key.as_str(), "aur/tool");
+    }
+
+    #[test]
+    fn write_plan_uses_absolute_path_from_injected_resolver() {
+        let directory = std::env::temp_dir().join(format!(
+            "system-tools-core-command-plan-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create resolver fixture");
+        let executable = directory.join("paru");
+        std::fs::write(&executable, "fixture").expect("write resolver fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("stat resolver fixture")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("make fixture executable");
+        }
+        let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
+        let backend = BuiltinBackend::new(BackendId::Paru);
+        let plan = backend
+            .command_for_with_resolver(
+                &WriteOperation::Install {
+                    packages: vec![backend.identity(NativePackageKey::new("aur/tool").unwrap())],
+                },
+                &resolver,
+            )
+            .expect("build command plan from injected resolver");
+        assert_eq!(plan.program, executable);
+        assert!(plan.program.is_absolute());
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1271,7 +1357,7 @@ mod tests {
                 packages: vec![identity],
             })
             .expect("flatpak uninstall plan");
-        assert_eq!(plan.command.program, std::path::PathBuf::from("flatpak"));
+        assert!(plan.command.program.is_absolute());
         assert_eq!(plan.command.args, ["uninstall", "org.example.App"]);
         assert_eq!(plan.packages, vec![expected_identity]);
     }
@@ -1320,6 +1406,13 @@ mod tests {
             Err(BackendError::UnsupportedCapability {
                 backend: BackendId::Flatpak,
                 capability: CapabilitySet::DOWNGRADE
+            })
+        );
+        assert_eq!(
+            flatpak.write(WriteOperation::SystemUpgrade),
+            Err(BackendError::UnsupportedCapability {
+                backend: BackendId::Flatpak,
+                capability: CapabilitySet::SYSTEM_UPGRADE
             })
         );
     }

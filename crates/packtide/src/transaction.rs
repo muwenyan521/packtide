@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::io::IsTerminal;
 use std::process::Command;
 use system_tools_core::{
-    BackendId, BuiltinBackend, PackageBackend, PackageId, PackageScope, TransactionAction,
-    command_exists, run_status_path,
+    BackendId, BuiltinBackend, ExecutableResolver, PackageBackend, PackageId, PackageScope,
+    TransactionAction, command_exists, run_command_plan,
 };
 
 pub(crate) fn execute_package(
@@ -24,10 +24,12 @@ pub(crate) fn execute_package(
         .cloned()
         .map(PackageId::new)
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let plan = BuiltinBackend::new(backend).transaction(action, package_ids)?;
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let plan =
+        BuiltinBackend::new(backend).transaction_with_resolver(action, package_ids, &resolver)?;
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary(action.as_str(), helper, "helper-managed", &targets);
-    run_status_path(&plan.command.program, &plan.command.args)?;
+    run_command_plan(&plan.command)?;
     Ok(())
 }
 
@@ -37,11 +39,15 @@ pub(crate) fn execute_flatpak(packages: &[String]) -> Result<()> {
         .cloned()
         .map(PackageId::new)
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let plan = BuiltinBackend::new(BackendId::Flatpak)
-        .transaction(TransactionAction::Remove, package_ids)?;
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let plan = BuiltinBackend::new(BackendId::Flatpak).transaction_with_resolver(
+        TransactionAction::Remove,
+        package_ids,
+        &resolver,
+    )?;
     let targets = packages.iter().map(String::as_str).collect::<Vec<_>>();
     print_summary("remove", "flatpak", "direct", &targets);
-    run_status_path(&plan.command.program, &plan.command.args)?;
+    run_command_plan(&plan.command)?;
     Ok(())
 }
 

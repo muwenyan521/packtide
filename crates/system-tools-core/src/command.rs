@@ -68,6 +68,38 @@ impl PrivilegeRunner {
         }
         Ok(status)
     }
+
+    pub fn run_plan(&self, plan: &crate::CommandPlan) -> Result<ExitStatus> {
+        let started = Instant::now();
+        let status = Command::new(&self.sudo_path)
+            .arg(&plan.program)
+            .args(&plan.args)
+            .env("PATH", PRIVILEGED_COMMAND_PATH)
+            .apply_plan_environment(plan)
+            .status()
+            .context("failed to execute sudo")?;
+        report_debug_timing(OsStr::new("sudo"), started, status);
+        if !status.success() {
+            bail!("sudo exited with {status}");
+        }
+        Ok(status)
+    }
+}
+
+trait CommandEnvironment {
+    fn apply_plan_environment(&mut self, plan: &crate::CommandPlan) -> &mut Self;
+}
+
+impl CommandEnvironment for Command {
+    fn apply_plan_environment(&mut self, plan: &crate::CommandPlan) -> &mut Self {
+        for variable in &plan.env_remove {
+            self.env_remove(variable);
+        }
+        if let Some(locale) = &plan.locale {
+            self.env("LC_ALL", locale);
+        }
+        self
+    }
 }
 
 pub fn require_privileged() -> Result<()> {
@@ -196,6 +228,25 @@ where
         bail!("{} exited with {status}", program.to_string_lossy());
     }
     Ok(status)
+}
+
+pub fn run_command_plan(plan: &crate::CommandPlan) -> Result<ExitStatus> {
+    match plan.privilege {
+        crate::CommandPrivilege::User => {
+            let started = Instant::now();
+            let status = Command::new(&plan.program)
+                .args(&plan.args)
+                .apply_plan_environment(plan)
+                .status()
+                .with_context(|| format!("failed to execute {}", plan.program.display()))?;
+            report_debug_timing(plan.program.as_os_str(), started, status);
+            if !status.success() {
+                bail!("{} exited with {status}", plan.program.display());
+            }
+            Ok(status)
+        }
+        crate::CommandPrivilege::Elevated => PrivilegeRunner::system()?.run_plan(plan),
+    }
 }
 
 pub fn run_privileged<S>(args: &[S]) -> Result<ExitStatus>
