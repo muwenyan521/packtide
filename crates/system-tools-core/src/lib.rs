@@ -8,8 +8,10 @@ mod platform;
 mod transaction;
 
 pub use backend::{
-    BackendClass, BackendError, BackendId, BuiltinBackend, CapabilitySet, CatalogStrategy,
-    PackageBackend, PackageId, PackageKind, ReadResult, Scope, TransactionPlan,
+    BackendClass, BackendError, BackendId, BackendOperation, BackendResponse, BuiltinBackend,
+    CapabilitySet, CatalogStrategy, NativeKey, NativePackageKey, PackageBackend, PackageId,
+    PackageIdentity, PackageKind, PackageScope, ReadBackend, ReadOperation, ReadRequest,
+    ReadResult, Scope, TransactionPlan, WriteBackend, WriteOperation,
 };
 pub use cache::{CacheStore, RefreshLock};
 pub use command::{
@@ -25,6 +27,6 @@ pub use platform::{
     detect_native_backend_from_file, detect_native_backend_from_path, parse_os_release,
 };
 pub use transaction::{
-    PackageUpgradeCommand, PackageUpgradePrivilege, package_upgrade_command,
+    CommandPrivilege, PackageUpgradeCommand, PackageUpgradePrivilege, package_upgrade_command,
     package_upgrade_command_for, run_package_upgrade,
 };
