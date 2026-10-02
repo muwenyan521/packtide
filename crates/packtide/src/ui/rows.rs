@@ -129,7 +129,11 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
     };
     let localized_source;
     let source = if let Some(repository) = record.repository.as_deref() {
-        repository
+        if repository == "flatpak@system" {
+            "flatpak@system"
+        } else {
+            repository
+        }
     } else {
         localized_source = crate::locale::source_label(crate::locale::current(), record.source);
         localized_source.as_str()
@@ -180,6 +184,9 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     if name.is_empty() {
         return None;
     }
+    let (source_label, _scope) = source_label
+        .split_once('@')
+        .unwrap_or((source_label, "user"));
     let (source, repository) = match PackageSource::parse(source_label).or_else(|| {
         [
             PackageSource::Pacman,
@@ -193,6 +200,7 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
         })
     }) {
         Some(source) => (source, None),
+        None if source_label == "flatpak" => (PackageSource::Flatpak, None),
         None if crate::sources::valid_package_name(source_label) => {
             (PackageSource::Pacman, Some(source_label.to_owned()))
         }

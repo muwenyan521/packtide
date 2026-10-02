@@ -10,8 +10,8 @@ mod transaction;
 pub use backend::{
     BackendClass, BackendError, BackendId, BackendOperation, BackendResponse, BuiltinBackend,
     CapabilitySet, CatalogStrategy, NativeKey, NativePackageKey, PackageBackend, PackageId,
-    PackageIdentity, PackageKind, PackageScope, ReadBackend, ReadOperation, ReadRequest,
-    ReadResult, Scope, TransactionPlan, WriteBackend, WriteOperation,
+    PackageIdentity, PackageKind, PackageScope, ReadBackend, ReadDetails, ReadOperation,
+    ReadRequest, ReadResult, Scope, TransactionPlan, WriteBackend, WriteOperation,
 };
 pub use cache::{CacheStore, RefreshLock};
 pub use command::{

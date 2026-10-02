@@ -309,7 +309,7 @@ fn install_fake_picker_covers_preview_accept_and_transaction_argv() {
 
     fixture.write_executable(
         "pacman",
-        "#!/bin/sh\ncase \"$1:$2\" in\n  --color=never:-Sl) printf 'core bash 5.3-1\\n' ;;\n  -Qq:) exit 0 ;;\n  *) exit 64 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$1:$2\" in\n  --color=never:-Sl) printf 'core bash 5.3-1\\n' ;;\n  *) printf 'Name : bash\\nVersion : 5.3-1\\nDescription : shell\\n' ;;\nesac\n",
     );
     fixture.write_executable(
         "paru",

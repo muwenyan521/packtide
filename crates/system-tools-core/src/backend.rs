@@ -275,6 +275,14 @@ pub struct ReadResult {
     pub operation: ReadOperation,
     pub packages: Vec<PackageIdentity>,
     pub source: CatalogStrategy,
+    pub details: Option<ReadDetails>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadDetails {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -462,6 +470,7 @@ pub trait PackageBackend {
             operation,
             packages,
             source: self.catalog_strategy(),
+            details: None,
         })
     }
 
@@ -480,6 +489,7 @@ pub trait PackageBackend {
                 .map(|package| self.identity(package.into()))
                 .collect(),
             source: self.catalog_strategy(),
+            details: None,
         })
     }
 
@@ -783,6 +793,7 @@ impl PackageBackend for BuiltinBackend {
                     operation,
                     packages: Vec::new(),
                     source: self.catalog_strategy(),
+                    details: None,
                 });
             }
         };
@@ -791,6 +802,7 @@ impl PackageBackend for BuiltinBackend {
             operation,
             packages,
             source,
+            details: None,
         })
     }
 }
@@ -846,12 +858,10 @@ fn read_pacman(
                 return Err(command_failed(backend, "read package details", &output));
             }
             Ok((
-                vec![identity_for(
-                    backend,
-                    PackageKind::System,
-                    PackageScope::System,
-                    key,
-                )?],
+                vec![
+                    identity_for(backend, PackageKind::System, PackageScope::System, key)?
+                        .with_display_name(output.stdout),
+                ],
                 CatalogStrategy::Enumerated,
             ))
         }
@@ -944,26 +954,31 @@ fn read_aur(
             Ok((packages, CatalogStrategy::Enumerated))
         }
         ReadOperation::Details { package } => {
+            let qi = package.as_str().strip_prefix("detail-qi:").is_some();
             let package = package
                 .as_str()
-                .strip_prefix("aur/")
+                .strip_prefix("detail-qi:")
                 .unwrap_or(package.as_str());
+            let package = package.strip_prefix("aur/").unwrap_or(package);
             let output = run_backend_command_for(
                 backend,
                 helper,
                 "read AUR package details",
-                &["--color=always", "-Si", package],
+                &["--color=always", if qi { "-Qi" } else { "-Si" }, package],
             )?;
             if !output.status.success() {
                 return Err(command_failed(backend, "read AUR package details", &output));
             }
             Ok((
-                vec![identity_for(
-                    backend,
-                    PackageKind::Aur,
-                    PackageScope::User,
-                    package.to_owned(),
-                )?],
+                vec![
+                    identity_for(
+                        backend,
+                        PackageKind::Aur,
+                        PackageScope::User,
+                        package.to_owned(),
+                    )?
+                    .with_display_name(output.stdout),
+                ],
                 CatalogStrategy::Enumerated,
             ))
         }
@@ -1033,12 +1048,10 @@ fn read_flatpak(
                 ));
             }
             Ok((
-                vec![identity_for(
-                    backend,
-                    PackageKind::Flatpak,
-                    PackageScope::User,
-                    key,
-                )?],
+                vec![
+                    identity_for(backend, PackageKind::Flatpak, PackageScope::User, key)?
+                        .with_display_name(output.stdout),
+                ],
                 CatalogStrategy::Enumerated,
             ))
         }

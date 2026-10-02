@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use system_tools_core::{
-    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageSource, run_capture,
+    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageId, PackageSource,
+    ReadOperation,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -36,6 +37,13 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         })
         .unwrap_or_else(|| package.to_owned());
     let backend_id = match source {
+        Some(PackageSource::Pacman) if matches!(kind, "install" | "downgrade") => {
+            if crate::app::package_helper().unwrap_or("paru") == "yay" {
+                BackendId::Yay
+            } else {
+                BackendId::Paru
+            }
+        }
         Some(PackageSource::Pacman) => BackendId::Pacman,
         Some(PackageSource::Aur) => {
             if crate::app::package_helper().unwrap_or("paru") == "yay" {
@@ -47,6 +55,11 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         Some(PackageSource::Flatpak) => BackendId::Flatpak,
         None => BackendId::Pacman,
     };
+    let identity_key = if kind == "downgrade" {
+        format!("detail-qi:{package}")
+    } else {
+        identity_key
+    };
     let identity = BuiltinBackend::new(backend_id).identity(NativePackageKey::new(identity_key)?);
     let package = identity
         .key()
@@ -54,7 +67,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         .rsplit_once('/')
         .map_or(identity.key().as_str(), |(_, name)| name);
     let helper = crate::app::package_helper().unwrap_or("paru");
-    let program = match (kind, source) {
+    let _program = match (kind, source) {
         ("remove", Some(PackageSource::Flatpak)) => "flatpak",
         ("remove", Some(PackageSource::Pacman | PackageSource::Aur))
         | ("downgrade", Some(_))
@@ -78,7 +91,15 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     if source != Some(PackageSource::Flatpak) {
         operation.insert(0, "--color=always");
     }
-    let output = run_capture(program, &operation, true)?;
+    let detail = BuiltinBackend::new(backend_id).read(ReadOperation::Details {
+        package: PackageId::new(identity.key().as_str())?,
+    });
+    let metadata = detail
+        .as_ref()
+        .ok()
+        .and_then(|result| result.packages.first())
+        .and_then(|item| item.display_name.as_deref())
+        .unwrap_or_default();
     let source_key = match source {
         Some(PackageSource::Pacman) => "source.pacman",
         Some(PackageSource::Aur) => "source.aur",
@@ -97,21 +118,15 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         "{}",
         preview_header(package, &source_label, &version, width)
     );
-    if output.stdout.trim().is_empty() {
+    if metadata.trim().is_empty() {
         println!("{}", crate::locale::text(lang, "preview.empty", &[]));
     } else {
-        print!("{}", colorize_metadata(&output.stdout));
+        print!("{}", colorize_metadata(metadata));
     }
-    if !output.status.success() {
-        let message = output.stderr.trim();
-        let error = if message.is_empty() {
-            format!("{program} exited with {}", output.status)
-        } else {
-            message.to_owned()
-        };
+    if let Err(error) = detail {
         println!(
             "\x1b[1;31m!\x1b[0m {}",
-            crate::locale::text(lang, "preview.failed", &[("error", &error)])
+            crate::locale::text(lang, "preview.failed", &[("error", &error.to_string())])
         );
     }
     Ok(())
