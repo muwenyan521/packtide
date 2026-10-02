@@ -1008,6 +1008,74 @@ fn downgrade_preview_runs_helper_with_color_and_renders_metadata() {
 }
 
 #[test]
+fn preview_details_use_installed_query_only_for_remove_and_downgrade() {
+    let fixture = Fixture::new();
+    let pacman_argv = fixture.path().join("pacman.preview.argv");
+    let paru_argv = fixture.path().join("paru.preview.argv");
+    fixture.write_executable(
+        "pacman",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncase \"$1:$2\" in\n  --color=always:-Qi) printf 'Name : bash\\nVersion : 5.3-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
+            pacman_argv.display()
+        ),
+    );
+    fixture.write_executable(
+        "paru",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncase \"$1:$2\" in\n  --color=always:-Qi|--color=always:-Si) printf 'Name : bash\\nVersion : 5.3-1\\n' ;;\n  *) exit 64 ;;\nesac\n",
+            paru_argv.display()
+        ),
+    );
+    fixture.write_executable(
+        "sudo",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 64\n",
+            fixture.path().join("sudo.argv").display()
+        ),
+    );
+    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("build isolated PATH");
+    let run_preview = |kind: &str, row: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
+            .args(["__preview", kind, row])
+            .env("PATH", &path)
+            .env("PACKTIDE_UI_LANG", "en")
+            .output()
+            .expect("run package preview");
+        assert!(
+            output.status.success(),
+            "{kind} preview failed; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run_preview("remove", "core\tbash\t5.3-1");
+    assert_eq!(
+        fs::read_to_string(&pacman_argv).expect("read Pacman remove preview argv"),
+        "--color=always\n-Qi\nbash\n"
+    );
+
+    run_preview("remove", "aur\tbash\t5.3-1");
+    assert_eq!(
+        fs::read_to_string(&paru_argv).expect("read AUR remove preview argv"),
+        "--color=always\n-Qi\nbash\n"
+    );
+
+    run_preview("install", "core\tbash\t5.3-1");
+    assert_eq!(
+        fs::read_to_string(&paru_argv).expect("read install preview argv"),
+        "--color=always\n-Si\ncore/bash\n"
+    );
+
+    run_preview("downgrade", "core\tbash\t5.3-1");
+    assert_eq!(
+        fs::read_to_string(&paru_argv).expect("read downgrade preview argv"),
+        "--color=always\n-Qi\nbash\n"
+    );
+    assert!(!fixture.path().join("sudo.argv").exists());
+}
+
+#[test]
 fn mirror_update_missing_reflector_names_the_affected_operation() {
     assert_missing_required_command("mirror-update", "reflector", "the mirror list update");
 }

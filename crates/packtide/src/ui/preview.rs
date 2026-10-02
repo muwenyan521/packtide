@@ -55,7 +55,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         Some(PackageSource::Flatpak) => BackendId::Flatpak,
         None => BackendId::Pacman,
     };
-    let identity_key = if kind == "downgrade" {
+    let identity_key = if matches!(kind, "remove" | "downgrade") {
         format!("detail-qi:{package}")
     } else {
         identity_key

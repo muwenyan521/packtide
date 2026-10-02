@@ -848,19 +848,26 @@ fn read_pacman(
             Ok((packages, CatalogStrategy::Enumerated))
         }
         ReadOperation::Details { package } => {
-            let key = package.as_str().to_owned();
+            let key = package.as_str();
+            let qi = key.strip_prefix("detail-qi:").is_some();
+            let key = key.strip_prefix("detail-qi:").unwrap_or(key);
             let output = run_backend_command(
                 backend,
                 "read package details",
-                &["--color=always", "-Si", &key],
+                &["--color=always", if qi { "-Qi" } else { "-Si" }, key],
             )?;
             if !output.status.success() {
                 return Err(command_failed(backend, "read package details", &output));
             }
             Ok((
                 vec![
-                    identity_for(backend, PackageKind::System, PackageScope::System, key)?
-                        .with_display_name(output.stdout),
+                    identity_for(
+                        backend,
+                        PackageKind::System,
+                        PackageScope::System,
+                        key.to_owned(),
+                    )?
+                    .with_display_name(output.stdout),
                 ],
                 CatalogStrategy::Enumerated,
             ))
