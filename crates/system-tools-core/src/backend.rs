@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 use crate::ExecutableResolver;
 use crate::plan::CommandPlan;
@@ -282,6 +283,7 @@ pub struct ReadResult {
 pub struct ReadDetails {
     pub stdout: String,
     pub stderr: String,
+    pub status: ExitStatus,
     pub success: bool,
 }
 
@@ -856,9 +858,6 @@ fn read_pacman(
                 "read package details",
                 &["--color=always", if qi { "-Qi" } else { "-Si" }, key],
             )?;
-            if !output.status.success() {
-                return Err(command_failed(backend, "read package details", &output));
-            }
             Ok((
                 vec![identity_for(
                     backend,
@@ -870,6 +869,7 @@ fn read_pacman(
                 Some(ReadDetails {
                     stdout: output.stdout,
                     stderr: output.stderr,
+                    status: output.status,
                     success: output.status.success(),
                 }),
             ))
@@ -975,9 +975,6 @@ fn read_aur(
                 "read AUR package details",
                 &["--color=always", if qi { "-Qi" } else { "-Si" }, package],
             )?;
-            if !output.status.success() {
-                return Err(command_failed(backend, "read AUR package details", &output));
-            }
             Ok((
                 vec![identity_for(
                     backend,
@@ -989,6 +986,7 @@ fn read_aur(
                 Some(ReadDetails {
                     stdout: output.stdout,
                     stderr: output.stderr,
+                    status: output.status,
                     success: output.status.success(),
                 }),
             ))
@@ -1051,13 +1049,6 @@ fn read_flatpak(
             let key = package.as_str().to_owned();
             let output =
                 run_backend_command(backend, "read Flatpak application details", &["info", &key])?;
-            if !output.status.success() {
-                return Err(command_failed(
-                    backend,
-                    "read Flatpak application details",
-                    &output,
-                ));
-            }
             Ok((
                 vec![identity_for(
                     backend,
@@ -1069,6 +1060,7 @@ fn read_flatpak(
                 Some(ReadDetails {
                     stdout: output.stdout,
                     stderr: output.stderr,
+                    status: output.status,
                     success: output.status.success(),
                 }),
             ))

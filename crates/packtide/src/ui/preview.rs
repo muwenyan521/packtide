@@ -84,12 +84,23 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let detail = BuiltinBackend::new(backend_id).read(ReadOperation::Details {
         package: PackageId::new(identity.key().as_str())?,
     });
-    let metadata = detail
-        .as_ref()
-        .ok()
-        .and_then(|result| result.details.as_ref())
-        .map(|details| details.stdout.as_str())
-        .unwrap_or_default();
+    let (metadata, failure) = match detail.as_ref() {
+        Ok(result) => match result.details.as_ref() {
+            Some(details) => {
+                let failure = (!details.success).then(|| {
+                    let message = details.stderr.trim();
+                    if message.is_empty() {
+                        format!("{} exited with {}", backend_id.as_str(), details.status)
+                    } else {
+                        message.to_owned()
+                    }
+                });
+                (details.stdout.as_str(), failure)
+            }
+            None => ("", None),
+        },
+        Err(error) => ("", Some(error.to_string())),
+    };
     let source_key = match source {
         Some(PackageSource::Pacman) => "source.pacman",
         Some(PackageSource::Aur) => "source.aur",
@@ -113,10 +124,10 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     } else {
         print!("{}", colorize_metadata(metadata));
     }
-    if let Err(error) = detail {
+    if let Some(error) = failure {
         println!(
             "\x1b[1;31m!\x1b[0m {}",
-            crate::locale::text(lang, "preview.failed", &[("error", &error.to_string())])
+            crate::locale::text(lang, "preview.failed", &[("error", &error)])
         );
     }
     Ok(())
