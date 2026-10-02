@@ -55,7 +55,9 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         Some(PackageSource::Flatpak) => BackendId::Flatpak,
         None => BackendId::Pacman,
     };
-    let identity_key = if matches!(kind, "remove" | "downgrade") {
+    let identity_key = if matches!(kind, "remove" | "downgrade")
+        && !matches!(source, Some(PackageSource::Flatpak))
+    {
         format!("detail-qi:{package}")
     } else {
         identity_key
@@ -83,6 +85,13 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     }
     let detail = BuiltinBackend::new(backend_id).read(ReadOperation::Details {
         package: PackageId::new(identity.key().as_str())?,
+        scope: if source == Some(PackageSource::Flatpak)
+            && parsed.as_ref().and_then(|row| row.repository.as_deref()) == Some("flatpak@system")
+        {
+            system_tools_core::PackageScope::System
+        } else {
+            system_tools_core::PackageScope::User
+        },
     });
     let (metadata, failure) = match detail.as_ref() {
         Ok(result) => match result.details.as_ref() {
