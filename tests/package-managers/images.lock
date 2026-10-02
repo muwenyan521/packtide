@@ -42,7 +42,7 @@ version = "4.14.0"
 [[image.alma]]
 registry = "docker.io/library/almalinux"
 tag = "9"
-manifest_digest = "sha256:3a3fa7f043b142bc8008c8b308d39b47d2c84008addcd52f9f9a7a82d2a90474"
+manifest_digest = "sha256:dc973f4dffd28a1e6ae4d1662086d83bac34cd26f3b701e7ba51f4dcb300c80d"
 architecture = "amd64"
 package_manager = "dnf4"
 version = "4.14.0"
