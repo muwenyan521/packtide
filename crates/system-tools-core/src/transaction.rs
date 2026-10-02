@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::process::ExitStatus;
 
-use crate::{run_privileged, run_status};
+use crate::{BackendError, CapabilitySet, run_privileged, run_status};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandPrivilege {
@@ -57,8 +57,10 @@ pub fn run_package_upgrade(manager: &str) -> Result<ExitStatus> {
 }
 
 /// Builds the upgrade command from a typed backend identifier.
-pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeCommand<'static> {
-    match backend {
+pub fn package_upgrade_command_for(
+    backend: crate::BackendId,
+) -> Result<PackageUpgradeCommand<'static>, BackendError> {
+    let command = match backend {
         crate::BackendId::Pacman => PackageUpgradeCommand {
             program: "pacman",
             args: &["-Su"],
@@ -87,17 +89,20 @@ pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeC
         | crate::BackendId::Xbps
         | crate::BackendId::Snap
         | crate::BackendId::Brew
-        | crate::BackendId::Nix => PackageUpgradeCommand {
-            program: "unsupported",
-            args: &[],
-            privilege: PackageUpgradePrivilege::User,
-        },
-    }
+        | crate::BackendId::Nix => {
+            return Err(BackendError::UnsupportedCapability {
+                backend,
+                capability: CapabilitySet::SYSTEM_UPGRADE,
+            });
+        }
+    };
+    Ok(command)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PackageUpgradePrivilege, package_upgrade_command};
+    use super::{PackageUpgradePrivilege, package_upgrade_command, package_upgrade_command_for};
+    use crate::{BackendError, BackendId, CapabilitySet};
 
     #[test]
     fn package_upgrade_command_uses_privileged_pacman_argv() {
@@ -145,5 +150,30 @@ mod tests {
         assert_eq!(command.program, "custom-manager");
         assert_eq!(command.args, ["-Syu"]);
         assert_eq!(command.privilege, PackageUpgradePrivilege::User);
+    }
+
+    #[test]
+    fn typed_upgrade_command_rejects_unimplemented_backends_without_sentinel() {
+        let unsupported = [
+            BackendId::Apt,
+            BackendId::Dnf5,
+            BackendId::Dnf4,
+            BackendId::Zypper,
+            BackendId::Apk,
+            BackendId::Xbps,
+            BackendId::Snap,
+            BackendId::Brew,
+            BackendId::Nix,
+        ];
+
+        for backend in unsupported {
+            assert_eq!(
+                package_upgrade_command_for(backend),
+                Err(BackendError::UnsupportedCapability {
+                    backend,
+                    capability: CapabilitySet::SYSTEM_UPGRADE,
+                })
+            );
+        }
     }
 }
