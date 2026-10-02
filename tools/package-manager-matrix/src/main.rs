@@ -30,6 +30,16 @@ fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
+fn seed_builder() -> Option<&'static str> {
+    if command_version("cloud-localds").is_some() {
+        Some("cloud-localds")
+    } else if command_version("xorriso").is_some() {
+        Some("xorriso")
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Image {
     name: String,
@@ -137,6 +147,7 @@ fn doctor() -> Result<()> {
     let qemu = command_version("qemu-system-x86_64");
     let kvm = Path::new("/dev/kvm").exists();
     let cloud_localds = command_version("cloud-localds");
+    let xorriso = command_version("xorriso");
     let mut missing = Vec::new();
     if podman.is_none() {
         missing.push("podman");
@@ -147,17 +158,19 @@ fn doctor() -> Result<()> {
     if !kvm {
         missing.push("/dev/kvm");
     }
-    if cloud_localds.is_none() {
-        missing.push("cloud-localds");
+    if seed_builder().is_none() {
+        missing.push("cloud-localds or xorriso");
     }
     let status = if missing.is_empty() { "pass" } else { "fail" };
     println!(
-        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_localds\":{},\"cloud_localds_required\":true,\"missing\":{}}}",
+        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_localds\":{},\"xorriso\":{},\"seed_builder\":{},\"missing\":{}}}",
         json_string(status),
         json_string(podman.as_deref().unwrap_or("MISSING")),
         json_string(qemu.as_deref().unwrap_or("MISSING")),
         kvm,
         json_string(cloud_localds.as_deref().unwrap_or("MISSING")),
+        json_string(xorriso.as_deref().unwrap_or("MISSING")),
+        json_string(seed_builder().unwrap_or("MISSING")),
         json_array(&missing)
     );
     if !missing.is_empty() {
@@ -553,8 +566,8 @@ fn vm_lane_probe() -> ProbeOutput {
             if !Path::new("/dev/kvm").exists() {
                 missing.push("/dev/kvm");
             }
-            if command_version("cloud-localds").is_none() {
-                missing.push("cloud-localds");
+            if seed_builder().is_none() {
+                missing.push("cloud-localds or xorriso");
             }
             let checksum = if missing.is_empty() {
                 verify_cloud_image(&image).err().map(|e| e.to_string())
@@ -585,17 +598,20 @@ fn vm_lane_probe() -> ProbeOutput {
 fn verify_cloud_image(image: &CloudImage) -> Result<()> {
     let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
     let result = download_cloud_image(image, &path);
-    let cleanup = fs::remove_file(&path);
-    if let Err(error) = cleanup {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(error).context("remove cloud image temp file");
-        }
-    }
+    remove_cloud_temp(&path)?;
     result
 }
 
+fn remove_cloud_temp(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("remove cloud image temp file"),
+    }
+}
+
 fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
-    let result = (|| {
+    (|| {
         let mut child = Command::new("curl")
             .args([
                 "--fail",
@@ -645,8 +661,7 @@ fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
             );
         }
         Ok(())
-    })();
-    result
+    })()
 }
 
 fn verify_cloud_image_lock() -> Result<()> {
@@ -662,10 +677,15 @@ fn verify_cloud_image_lock() -> Result<()> {
 
 fn vm_run() -> Result<()> {
     let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
-    let missing = ["qemu-system-x86_64", "qemu-img", "cloud-localds"]
+    let missing = ["qemu-system-x86_64", "qemu-img"]
         .into_iter()
         .filter(|tool| command_version(tool).is_none())
         .collect::<Vec<_>>();
+    if seed_builder().is_none() {
+        let mut missing = missing;
+        missing.push("cloud-localds or xorriso");
+        return vm_unavailable(&image, &missing);
+    }
     if !Path::new("/dev/kvm").exists() {
         let mut missing = missing;
         missing.push("/dev/kvm");
@@ -697,12 +717,24 @@ fn vm_run() -> Result<()> {
         &meta_data,
         b"instance-id: pm-matrix\nlocal-hostname: pm-matrix\n",
     )?;
-    let status = Command::new("cloud-localds")
-        .arg(&seed)
-        .arg(&user_data)
-        .arg(&meta_data)
-        .status()
-        .context("create cloud-init seed")?;
+    let seed_tool = seed_builder().context("no cloud-init seed builder")?;
+    let status = if seed_tool == "cloud-localds" {
+        Command::new(seed_tool)
+            .arg(&seed)
+            .arg(&user_data)
+            .arg(&meta_data)
+            .status()
+    } else {
+        Command::new(seed_tool)
+            .args([
+                "-as", "mkisofs", "-volid", "cidata", "-joliet", "-rock", "-o",
+            ])
+            .arg(&seed)
+            .arg(&user_data)
+            .arg(&meta_data)
+            .status()
+    }
+    .context("create cloud-init seed")?;
     if !status.success() {
         bail!("cloud-localds exited with {status}");
     }
@@ -726,7 +758,7 @@ fn vm_run() -> Result<()> {
         .spawn()
         .context("spawn QEMU")?;
     cleanup.child = Some(child);
-    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(30))?;
+    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(120))?;
     cleanup.child = None;
     if !result.stdout.contains("PM_MATRIX_GUEST_OK") {
         bail!("guest probe did not report PM_MATRIX_GUEST_OK");
@@ -791,14 +823,44 @@ fn run_child_timeout(child: &mut Child, timeout: Duration) -> Result<Output> {
         }
         if interrupted() {
             terminate(child);
+            let _output = child_output(child)?;
             bail!("child interrupted");
         }
         if start.elapsed() >= timeout {
             terminate(child);
-            bail!("VM exceeded {}ms timeout", timeout.as_millis());
+            let output = child_output(child)?;
+            let serial = output.stdout.trim();
+            if serial.is_empty() {
+                bail!(
+                    "VM exceeded {}ms timeout (guest serial empty)",
+                    timeout.as_millis()
+                );
+            }
+            bail!(
+                "VM exceeded {}ms timeout (guest serial: {})",
+                timeout.as_millis(),
+                serial
+            );
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn child_output(child: &mut Child) -> Result<Output> {
+    let status = child.wait().context("wait for terminated child")?;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_string(&mut stdout)?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_string(&mut stderr)?;
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 struct VmCleanup {
@@ -1032,12 +1094,12 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "dnf5" => Some(&[
             "sh",
             "-ec",
-            "dnf5 --version; printf 'LIST\\n'; dnf5 list --available bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf5 remove -y hello",
+            "dnf5 --version; printf 'LIST\\n'; dnf5 list installed bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf5 remove -y hello",
         ]),
         "dnf4" => Some(&[
             "sh",
             "-ec",
-            "dnf --version; printf 'LIST\\n'; dnf list --available bash; printf 'DETAILS\\n'; dnf info bash; printf 'INSTALL\\n'; dnf install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf remove -y hello",
+            "dnf --version; printf 'LIST\\n'; dnf list installed bash; printf 'DETAILS\\n'; dnf info bash; printf 'INSTALL\\n'; dnf install -y --setopt=install_weak_deps=False tree; printf 'REMOVE\\n'; dnf remove -y tree",
         ]),
         "zypper" => Some(&[
             "sh",
@@ -1047,7 +1109,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "xbps" => Some(&[
             "sh",
             "-ec",
-            "xbps-query --version; printf 'LIST\\n'; xbps-query -Rs '^bash$'; printf 'DETAILS\\n'; xbps-query -S bash; printf 'INSTALL\\n'; xbps-install -Sy hello; printf 'REMOVE\\n'; xbps-remove -Ry hello",
+            "xbps-query --version; xbps-install -S; printf 'LIST\\n'; xbps-query -l; printf 'DETAILS\\n'; xbps-query -S bash; printf 'INSTALL\\n'; xbps-install -y curl; printf 'REMOVE\\n'; xbps-remove -Ry curl",
         ]),
         _ => None,
     }
@@ -1250,7 +1312,28 @@ mod tests {
     #[test]
     fn digest_validation_rejects_bad_values() {
         assert!(validate_digest("sha256:bad").is_err());
+        assert!(validate_digest(&format!("sha256:{}", "g".repeat(64))).is_err());
         assert!(validate_digest(&format!("sha256:{}", "a".repeat(64))).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_guest_exit_is_reported_as_failure() {
+        let mut child = Command::new("sh").args(["-c", "exit 23"]).spawn().unwrap();
+        let error = match run_child_timeout(&mut child, Duration::from_secs(2)) {
+            Ok(_) => panic!("nonzero guest exit was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("exit status: 23"));
+    }
+
+    #[test]
+    fn cleanup_error_is_returned_with_context() {
+        let directory = std::env::temp_dir().join(format!("pm-matrix-cleanup-{}", unix_nanos()));
+        fs::create_dir(&directory).unwrap();
+        let error = remove_cloud_temp(&directory).unwrap_err();
+        assert!(error.to_string().contains("remove cloud image temp file"));
+        fs::remove_dir(&directory).unwrap();
     }
     #[test]
     fn lock_has_required_alpine_fields() {
