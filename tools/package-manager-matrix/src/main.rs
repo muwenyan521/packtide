@@ -89,6 +89,8 @@ fn main() -> Result<()> {
         }
         "verify-cloud-image" => verify_cloud_image_lock(),
         "audit-cleanup" => audit_cleanup(),
+        "vm-run" => vm_run(),
+        "vm-interrupt-test" => vm_interrupt_test(),
         "all" => {
             let mut evidence = None;
             while let Some(arg) = args.next() {
@@ -103,7 +105,7 @@ fn main() -> Result<()> {
             probe_all(evidence.as_deref())
         }
         _ => bail!(
-            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|all> [options]"
+            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|all|vm-run|vm-interrupt-test> [options]"
         ),
     }
 }
@@ -549,6 +551,12 @@ fn vm_lane_probe() -> ProbeOutput {
 
 fn verify_cloud_image(image: &CloudImage) -> Result<()> {
     let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
+    let result = download_cloud_image(image, &path);
+    let _ = fs::remove_file(&path);
+    result
+}
+
+fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
     let result = (|| {
         let status = Command::new("curl")
             .args([
@@ -558,7 +566,7 @@ fn verify_cloud_image(image: &CloudImage) -> Result<()> {
                 "--show-error",
                 "--output",
             ])
-            .arg(&path)
+            .arg(path)
             .arg(&image.url)
             .status()
             .context("download cloud image")?;
@@ -566,7 +574,7 @@ fn verify_cloud_image(image: &CloudImage) -> Result<()> {
             bail!("curl exited with {status}");
         }
         let output = Command::new("sha256sum")
-            .arg(&path)
+            .arg(path)
             .output()
             .context("hash cloud image")?;
         if !output.status.success() {
@@ -582,7 +590,6 @@ fn verify_cloud_image(image: &CloudImage) -> Result<()> {
         }
         Ok(())
     })();
-    let _ = fs::remove_file(&path);
     result
 }
 
@@ -595,6 +602,124 @@ fn verify_cloud_image_lock() -> Result<()> {
         json_string(&image.sha256)
     );
     Ok(())
+}
+
+fn vm_run() -> Result<()> {
+    let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
+    let missing = ["qemu-system-x86_64", "qemu-img", "cloud-init"]
+        .into_iter()
+        .filter(|tool| command_version(tool).is_none())
+        .collect::<Vec<_>>();
+    if !Path::new("/dev/kvm").exists() {
+        let mut missing = missing;
+        missing.push("/dev/kvm");
+        return vm_unavailable(&image, &missing);
+    }
+    if !missing.is_empty() {
+        return vm_unavailable(&image, &missing);
+    }
+    let work = std::env::temp_dir().join(format!("pm-matrix-vm-{}", unix_nanos()));
+    fs::create_dir_all(&work)?;
+    let mut cleanup = VmCleanup::new(work.clone());
+    let base = work.join("ubuntu.img");
+    download_cloud_image(&image, &base)?;
+    let overlay = work.join("overlay.qcow2");
+    let status = Command::new("qemu-img")
+        .args(["create", "-f", "qcow2", "-F", "raw", "-b"])
+        .arg(&base)
+        .arg(&overlay)
+        .status()
+        .context("create VM overlay")?;
+    if !status.success() {
+        bail!("qemu-img exited with {status}");
+    }
+    let child = Command::new("qemu-system-x86_64")
+        .args([
+            "-enable-kvm",
+            "-nographic",
+            "-serial",
+            "mon:stdio",
+            "-m",
+            "1024",
+            "-drive",
+        ])
+        .arg(format!("file={},if=virtio,format=qcow2", overlay.display()))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn QEMU")?;
+    cleanup.child = Some(child);
+    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(30));
+    cleanup.child = None;
+    result
+}
+
+fn vm_unavailable(image: &CloudImage, missing: &[&str]) -> Result<()> {
+    println!(
+        "{{\"scenario\":\"snap-vm\",\"status\":1,\"lane_status\":\"unavailable\",\"missing\":{},\"image\":{},\"sha256\":{},\"cleanup\":true}}",
+        json_array(missing),
+        json_string(&image.url),
+        json_string(&image.sha256)
+    );
+    bail!("Snap VM runner unavailable: missing {}", missing.join(", "))
+}
+
+fn vm_interrupt_test() -> Result<()> {
+    let work = std::env::temp_dir().join(format!("pm-matrix-vm-interrupt-{}", unix_nanos()));
+    fs::create_dir_all(&work)?;
+    let marker = work.join("overlay.qcow2");
+    fs::write(&marker, b"interruption fixture")?;
+    let mut cleanup = VmCleanup::new(work.clone());
+    cleanup.child = Some(Command::new("sleep").arg("60").spawn()?);
+    let timed_out =
+        run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_millis(100)).is_err();
+    cleanup.child = None;
+    drop(cleanup);
+    let clean = !work.exists();
+    println!(
+        "{{\"scenario\":\"snap-vm-interruption\",\"timed_out\":{},\"cleanup\":{},\"workdir\":{}}}",
+        timed_out,
+        clean,
+        json_string(&work.display().to_string())
+    );
+    if !timed_out || !clean {
+        bail!("interruption cleanup failed");
+    }
+    Ok(())
+}
+
+fn run_child_timeout(child: &mut Child, timeout: Duration) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            terminate(child);
+            bail!("VM exceeded {}ms timeout", timeout.as_millis());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+struct VmCleanup {
+    work: PathBuf,
+    child: Option<Child>,
+}
+
+impl VmCleanup {
+    fn new(work: PathBuf) -> Self {
+        Self { work, child: None }
+    }
+}
+
+impl Drop for VmCleanup {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            terminate(child);
+        }
+        let _ = fs::remove_dir_all(&self.work);
+    }
 }
 
 fn audit_cleanup() -> Result<()> {
