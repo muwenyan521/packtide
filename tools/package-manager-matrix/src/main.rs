@@ -136,7 +136,7 @@ fn doctor() -> Result<()> {
     let podman = command_version("podman");
     let qemu = command_version("qemu-system-x86_64");
     let kvm = Path::new("/dev/kvm").exists();
-    let cloud_init = command_version("cloud-init");
+    let cloud_localds = command_version("cloud-localds");
     let mut missing = Vec::new();
     if podman.is_none() {
         missing.push("podman");
@@ -147,17 +147,17 @@ fn doctor() -> Result<()> {
     if !kvm {
         missing.push("/dev/kvm");
     }
-    if cloud_init.is_none() {
-        missing.push("cloud-init");
+    if cloud_localds.is_none() {
+        missing.push("cloud-localds");
     }
     let status = if missing.is_empty() { "pass" } else { "fail" };
     println!(
-        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_init\":{},\"cloud_init_required\":true,\"missing\":{}}}",
+        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_localds\":{},\"cloud_localds_required\":true,\"missing\":{}}}",
         json_string(status),
         json_string(podman.as_deref().unwrap_or("MISSING")),
         json_string(qemu.as_deref().unwrap_or("MISSING")),
         kvm,
-        json_string(cloud_init.as_deref().unwrap_or("MISSING")),
+        json_string(cloud_localds.as_deref().unwrap_or("MISSING")),
         json_array(&missing)
     );
     if !missing.is_empty() {
@@ -443,7 +443,7 @@ fn probe_image(
             "--name",
             &name,
             "--network",
-            "none",
+            "bridge",
             &full_ref,
         ])
         .args(args)
@@ -1019,12 +1019,36 @@ impl Drop for CleanupGuard {
 
 fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
     match manager {
-        "apk" => Some(&["apk", "--version"]),
-        "apt" => Some(&["apt-get", "--version"]),
-        "dnf5" => Some(&["dnf5", "--version"]),
-        "dnf4" => Some(&["dnf", "--version"]),
-        "zypper" => Some(&["zypper", "--version"]),
-        "xbps" => Some(&["xbps-query", "--version"]),
+        "apk" => Some(&[
+            "sh",
+            "-ec",
+            "apk --version; printf 'LIST\\n'; apk search busybox; printf 'DETAILS\\n'; apk info busybox; printf 'INSTALL\\n'; apk add --no-cache curl; printf 'REMOVE\\n'; apk del curl",
+        ]),
+        "apt" => Some(&[
+            "sh",
+            "-ec",
+            "apt-get --version; apt-get update -qq; printf 'LIST\\n'; apt-cache search '^hello$'; printf 'DETAILS\\n'; apt-cache show hello; printf 'INSTALL\\n'; apt-get install -y --no-install-recommends hello; printf 'REMOVE\\n'; apt-get remove -y hello",
+        ]),
+        "dnf5" => Some(&[
+            "sh",
+            "-ec",
+            "dnf5 --version; printf 'LIST\\n'; dnf5 list --available bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf5 remove -y hello",
+        ]),
+        "dnf4" => Some(&[
+            "sh",
+            "-ec",
+            "dnf --version; printf 'LIST\\n'; dnf list --available bash; printf 'DETAILS\\n'; dnf info bash; printf 'INSTALL\\n'; dnf install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf remove -y hello",
+        ]),
+        "zypper" => Some(&[
+            "sh",
+            "-ec",
+            "zypper --version; printf 'LIST\\n'; zypper --non-interactive search bash; printf 'DETAILS\\n'; zypper --non-interactive info bash; printf 'INSTALL\\n'; zypper --non-interactive --no-gpg-checks install hello; printf 'REMOVE\\n'; zypper --non-interactive remove hello",
+        ]),
+        "xbps" => Some(&[
+            "sh",
+            "-ec",
+            "xbps-query --version; printf 'LIST\\n'; xbps-query -Rs '^bash$'; printf 'DETAILS\\n'; xbps-query -S bash; printf 'INSTALL\\n'; xbps-install -Sy hello; printf 'REMOVE\\n'; xbps-remove -Ry hello",
+        ]),
         _ => None,
     }
 }
