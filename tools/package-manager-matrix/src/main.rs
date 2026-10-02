@@ -465,20 +465,18 @@ fn probe_image(
         Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
     };
     let package_manager_version = parse_manager_version(&image.manager, &stdout);
-    let (status, error) =
-        if status == 0 && package_manager_version.as_deref() != Some(image.version.as_str()) {
-            (
-                1,
-                Some(format!(
-                    "{} version mismatch: expected {}, observed {}",
-                    image.manager,
-                    image.version,
-                    package_manager_version.as_deref().unwrap_or("unavailable")
-                )),
-            )
-        } else {
-            (status, error)
-        };
+    let (status, error) = if status == 0 {
+        match validate_manager_version(
+            &image.manager,
+            &image.version,
+            package_manager_version.as_deref(),
+        ) {
+            Ok(()) => (status, error),
+            Err(error) => (1, Some(error.to_string())),
+        }
+    } else {
+        (status, error)
+    };
     ProbeOutput {
         lane: image.name.clone(),
         kind: "container",
@@ -1051,6 +1049,18 @@ fn parse_manager_version(manager: &str, stdout: &str) -> Option<String> {
     Some(version.to_string())
 }
 
+fn validate_manager_version(manager: &str, expected: &str, observed: Option<&str>) -> Result<()> {
+    if observed != Some(expected) {
+        bail!(
+            "{} version mismatch: expected {}, observed {}",
+            manager,
+            expected,
+            observed.unwrap_or("unavailable")
+        );
+    }
+    Ok(())
+}
+
 fn validate_image(image: &Image) -> Result<()> {
     if image.name.is_empty()
         || image.registry.is_empty()
@@ -1288,5 +1298,12 @@ mod tests {
     fn json_string_escapes_control_characters() {
         assert_eq!(json_string("line\nq\t\u{0001}"), "\"line\\nq\\t\\u0001\"");
         assert!(!json_string("q\n").contains('\n'));
+    }
+    #[test]
+    fn probe_version_requires_exact_observed_value() {
+        let observed =
+            parse_manager_version("apk", "apk-tools 2.14.4, compiled for x86_64.\n").unwrap();
+        assert!(validate_manager_version("apk", "2.14.4-r0", Some(&observed)).is_err());
+        assert!(validate_manager_version("apk", "2.14.4", Some(&observed)).is_ok());
     }
 }
