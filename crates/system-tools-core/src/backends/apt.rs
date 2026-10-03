@@ -254,7 +254,7 @@ impl AptBackend {
     }
 
     pub fn transaction(&self, operation: WriteOperation) -> Result<TransactionPlan, AptError> {
-        let (verb, packages): (&str, &[PackageId]) = match &operation {
+        let (verb, packages): (&str, &[crate::PackageIdentity]) = match &operation {
             WriteOperation::Install { packages } => ("install", packages),
             WriteOperation::Remove { packages } => ("remove", packages),
             WriteOperation::Upgrade { packages } => ("install", packages),
@@ -270,32 +270,27 @@ impl AptBackend {
                 });
             }
         };
-        if packages.is_empty() || packages.iter().any(|p| p.as_str().trim().is_empty()) {
+        if packages.is_empty()
+            || packages
+                .iter()
+                .any(|p| p.native_key.as_str().trim().is_empty())
+        {
             return Err(AptError::InvalidPackageId);
         }
-        let package_ids: Vec<PackageId> = packages.to_vec();
+        let package_identities = packages.to_vec();
         let mut command = elevated_plan(&self.apt_get, [verb]);
-        command
-            .args
-            .extend(packages.iter().map(|p| OsString::from(p.as_str())));
+        command.args.extend(
+            packages
+                .iter()
+                .map(|p| OsString::from(p.native_key.as_str())),
+        );
         Ok(TransactionPlan {
             backend: BackendId::Apt,
             kind: PackageKind::System,
             scope: PackageScope::System,
             operation,
             command,
-            packages: package_ids
-                .iter()
-                .cloned()
-                .map(|p| {
-                    crate::PackageIdentity::new(
-                        BackendId::Apt,
-                        PackageKind::System,
-                        PackageScope::System,
-                        p,
-                    )
-                })
-                .collect(),
+            packages: package_identities,
         })
     }
 }
@@ -315,7 +310,16 @@ fn elevated_plan<const N: usize>(program: &Path, args: [&str; N]) -> CommandPlan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PackageId, WriteOperation};
+    use crate::{PackageId, PackageIdentity, WriteOperation};
+
+    fn identity(name: &str) -> PackageIdentity {
+        PackageIdentity::new(
+            BackendId::Apt,
+            PackageKind::System,
+            PackageScope::System,
+            PackageId::new(name).unwrap(),
+        )
+    }
 
     #[test]
     fn parses_deb822_and_continuations() {
@@ -345,7 +349,7 @@ mod tests {
         );
         let transaction = backend
             .transaction(WriteOperation::Install {
-                packages: vec![PackageId::new("bash:amd64").unwrap()],
+                packages: vec![identity("bash:amd64")],
             })
             .unwrap();
         println!("catalog={catalog:?}");
@@ -391,7 +395,9 @@ mod tests {
         );
         let id = PackageId::new("bash:amd64").unwrap();
         let plan = backend
-            .transaction(WriteOperation::Install { packages: vec![id] })
+            .transaction(WriteOperation::Install {
+                packages: vec![identity(id.as_str())],
+            })
             .unwrap()
             .command;
         assert_eq!(plan.program, PathBuf::from("/usr/bin/apt-get"));
@@ -412,7 +418,7 @@ mod tests {
         );
         let err = backend
             .transaction(WriteOperation::Downgrade {
-                packages: vec![PackageId::new("x").unwrap()],
+                packages: vec![identity("x")],
             })
             .unwrap_err();
         assert_eq!(err, AptError::UnsupportedOperation);
@@ -435,7 +441,9 @@ mod tests {
         let backend = AptBackend::from_paths("/apt-cache", "/apt-get", "/dpkg-query");
         let id = PackageId::new("pkg; touch /tmp/not-run").unwrap();
         let plan = backend
-            .transaction(WriteOperation::Install { packages: vec![id] })
+            .transaction(WriteOperation::Install {
+                packages: vec![identity(id.as_str())],
+            })
             .unwrap();
         assert_eq!(plan.command.args, ["install", "pkg; touch /tmp/not-run"]);
     }

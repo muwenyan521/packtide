@@ -198,15 +198,15 @@ pub struct ReadResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WriteOperation {
-    Install { packages: Vec<PackageId> },
-    Remove { packages: Vec<PackageId> },
-    Upgrade { packages: Vec<PackageId> },
-    Downgrade { packages: Vec<PackageId> },
+    Install { packages: Vec<PackageIdentity> },
+    Remove { packages: Vec<PackageIdentity> },
+    Upgrade { packages: Vec<PackageIdentity> },
+    Downgrade { packages: Vec<PackageIdentity> },
     SystemUpgrade,
 }
 
 impl WriteOperation {
-    pub fn transaction(action: TransactionAction, packages: Vec<PackageId>) -> Self {
+    pub fn transaction(action: TransactionAction, packages: Vec<PackageIdentity>) -> Self {
         match action {
             TransactionAction::Install => Self::Install { packages },
             TransactionAction::Remove => Self::Remove { packages },
@@ -225,7 +225,7 @@ impl WriteOperation {
         }
     }
 
-    pub fn packages(&self) -> &[PackageId] {
+    pub fn packages(&self) -> &[PackageIdentity] {
         match self {
             Self::Install { packages }
             | Self::Remove { packages }
@@ -387,12 +387,7 @@ pub trait PackageBackend {
             return Err(BackendError::InvalidPlan);
         }
         let command = self.command_for(&operation)?;
-        let packages = operation
-            .packages()
-            .iter()
-            .cloned()
-            .map(|package| self.identity(package))
-            .collect();
+        let packages = operation.packages().to_vec();
         Ok(TransactionPlan {
             backend: self.id(),
             kind: self.kind(),
@@ -406,7 +401,7 @@ pub trait PackageBackend {
     fn transaction(
         &self,
         action: TransactionAction,
-        packages: Vec<PackageId>,
+        packages: Vec<PackageIdentity>,
     ) -> Result<TransactionPlan, BackendError> {
         self.write(WriteOperation::transaction(action, packages))
     }
@@ -448,7 +443,9 @@ pub trait PackageBackend {
         };
         command.args.push(OsString::from(flag));
         for package in operation.packages() {
-            command.args.push(OsString::from(package.as_str()));
+            command
+                .args
+                .push(OsString::from(package.native_key.as_str()));
         }
         Ok(command)
     }
@@ -540,10 +537,17 @@ mod tests {
     };
     use crate::{CommandPrivilege, TransactionAction};
 
-    fn ids(values: &[&str]) -> Vec<PackageId> {
+    fn ids(values: &[&str]) -> Vec<PackageIdentity> {
         values
             .iter()
-            .map(|value| PackageId::new(*value).expect("valid package id"))
+            .map(|value| {
+                PackageIdentity::new(
+                    BackendId::Pacman,
+                    PackageKind::System,
+                    PackageScope::System,
+                    PackageId::new(*value).expect("valid package id"),
+                )
+            })
             .collect()
     }
 
