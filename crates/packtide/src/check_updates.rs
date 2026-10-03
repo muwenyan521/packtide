@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::time::Instant;
 use system_tools_core::{
-    BackendId, BuiltinBackend, CacheStore, ExecutableResolver, PackageBackend, PackageSource,
+    BackendId, BackendRegistry, CacheStore, ExecutableResolver, PackageBackend, PackageSource,
     ReadOperation, current_executable,
 };
 
@@ -226,13 +226,15 @@ impl UpdateCache {
 
 fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
     let mut updates = Vec::new();
+    let registry = BackendRegistry::default();
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
     if resolver
         .resolve(std::ffi::OsStr::new("checkupdates"))
         .is_some()
     {
         let started = Instant::now();
-        let typed = BuiltinBackend::new(BackendId::Pacman)
+        let typed = registry
+            .backend(BackendId::Pacman)?
             .read(ReadOperation::Updates)
             .ok()?;
         updates.extend(typed.packages.into_iter().map(|package| PackageUpdate {
@@ -253,7 +255,8 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         } else {
             BackendId::Paru
         };
-        let typed = BuiltinBackend::new(backend)
+        let typed = registry
+            .backend(backend)?
             .read(ReadOperation::Updates)
             .ok()?;
         updates.extend(typed.packages.into_iter().map(|package| {
@@ -275,11 +278,13 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
 
 fn query_flatpak_updates() -> Vec<PackageUpdate> {
     let started = Instant::now();
+    let registry = BackendRegistry::default();
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
     let updates = resolver
         .resolve(std::ffi::OsStr::new("flatpak"))
         .and_then(|flatpak| {
-            let typed = BuiltinBackend::new(BackendId::Flatpak)
+            let typed = registry
+                .backend(BackendId::Flatpak)?
                 .read(ReadOperation::Updates)
                 .ok()?;
             let _ = flatpak;

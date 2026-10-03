@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use system_tools_core::{
-    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageId, PackageSource,
+    BackendId, BackendRegistry, NativePackageKey, PackageBackend, PackageId, PackageSource,
     ReadOperation,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -62,7 +62,11 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     } else {
         identity_key
     };
-    let identity = BuiltinBackend::new(backend_id).identity(NativePackageKey::new(identity_key)?);
+    let registry = BackendRegistry::default();
+    let backend = registry
+        .backend(backend_id)
+        .ok_or_else(|| anyhow::anyhow!("unknown backend {}", backend_id.as_str()))?;
+    let identity = backend.identity(NativePackageKey::new(identity_key)?);
     if !matches!(
         (kind, source),
         (
@@ -78,7 +82,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
             crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
         );
     }
-    let detail = BuiltinBackend::new(backend_id).read(ReadOperation::Details {
+    let detail = backend.read(ReadOperation::Details {
         package: PackageId::new(identity.key().as_str())?,
         scope: if source == Some(PackageSource::Flatpak)
             && parsed.as_ref().and_then(|row| row.repository.as_deref()) == Some("flatpak@system")
