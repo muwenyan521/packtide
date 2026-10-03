@@ -1,20 +1,318 @@
+use crate::{
+    BackendId, CommandPlan, CommandPrivilege, ExecutableResolver, PackageId, PackageKind,
+    PackageScope, TransactionPlan, WriteOperation,
+};
+use serde_json::Value;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
-use serde_json::Value;
-use crate::{BackendId, CommandPlan, CommandPrivilege, ExecutableResolver, PackageId, PackageKind, PackageScope, TransactionPlan, WriteOperation};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum DnfGeneration { Dnf5, Dnf4 }
-#[derive(Clone, Debug, Eq, PartialEq)] pub struct DnfPackage { pub name: String, pub epoch: Option<String>, pub version: String, pub release: Option<String>, pub arch: Option<String>, pub repo: Option<String>, pub installed: bool }
-#[derive(Clone, Debug, Eq, PartialEq)] pub struct DnfUpdate { pub name: String, pub current: Option<String>, pub candidate: String, pub arch: Option<String> }
-#[derive(Clone, Debug, Eq, PartialEq)] pub enum DnfError { MalformedJson(String), MissingField { record: usize, field: &'static str }, MalformedTable { line: usize, reason: &'static str }, InvalidPackageId, UnsupportedOperation, MissingExecutable(&'static str) }
-impl fmt::Display for DnfError { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { match self { Self::MalformedJson(e) => write!(f,"invalid DNF5 JSON: {e}"), Self::MissingField{record,field} => write!(f,"DNF5 record {record} is missing {field}"), Self::MalformedTable{line,reason} => write!(f,"invalid DNF4 queryformat line {line}: {reason}"), Self::InvalidPackageId => f.write_str("package id must not be empty"), Self::UnsupportedOperation => f.write_str("DNF does not support this operation"), Self::MissingExecutable(n) => write!(f,"required executable not found: {n}") } } }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnfGeneration {
+    Dnf5,
+    Dnf4,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnfPackage {
+    pub name: String,
+    pub epoch: Option<String>,
+    pub version: String,
+    pub release: Option<String>,
+    pub arch: Option<String>,
+    pub repo: Option<String>,
+    pub installed: bool,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnfUpdate {
+    pub name: String,
+    pub current: Option<String>,
+    pub candidate: String,
+    pub arch: Option<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DnfError {
+    MalformedJson(String),
+    MissingField { record: usize, field: &'static str },
+    MalformedTable { line: usize, reason: &'static str },
+    InvalidPackageId,
+    UnsupportedOperation,
+    MissingExecutable(&'static str),
+}
+impl fmt::Display for DnfError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedJson(e) => write!(f, "invalid DNF5 JSON: {e}"),
+            Self::MissingField { record, field } => {
+                write!(f, "DNF5 record {record} is missing {field}")
+            }
+            Self::MalformedTable { line, reason } => {
+                write!(f, "invalid DNF4 queryformat line {line}: {reason}")
+            }
+            Self::InvalidPackageId => f.write_str("package id must not be empty"),
+            Self::UnsupportedOperation => f.write_str("DNF does not support this operation"),
+            Self::MissingExecutable(n) => write!(f, "required executable not found: {n}"),
+        }
+    }
+}
 impl std::error::Error for DnfError {}
-fn records(value: Value) -> Vec<Value> { match value { Value::Array(v) => v, Value::Object(mut o) => ["packages","results","items"].iter().find_map(|k| o.remove(*k)).and_then(|v| v.as_array().cloned()).unwrap_or_else(|| vec![Value::Object(o)]), _ => Vec::new() } }
-fn field<'a>(o: &'a serde_json::Map<String, Value>, names: &[&str]) -> Option<&'a str> { names.iter().find_map(|n| o.get(*n).and_then(Value::as_str)) }
-pub fn parse_dnf5_json(input: &str) -> Result<Vec<DnfPackage>, DnfError> { let value: Value = serde_json::from_str(input).map_err(|e| DnfError::MalformedJson(e.to_string()))?; records(value).into_iter().enumerate().map(|(i,v)| { let o=v.as_object().ok_or_else(|| DnfError::MalformedJson(format!("record {} is not an object",i+1)))?; let name=field(o,&["name"]).filter(|x|!x.trim().is_empty()).ok_or(DnfError::MissingField{record:i+1,field:"name"})?; let version=field(o,&["version","evr"]).filter(|x|!x.trim().is_empty()).ok_or(DnfError::MissingField{record:i+1,field:"version"})?; Ok(DnfPackage{name:name.into(),epoch:field(o,&["epoch"]).map(Into::into),version:version.into(),release:field(o,&["release"]).map(Into::into),arch:field(o,&["arch","architecture"]).map(Into::into),repo:field(o,&["repo","repository"]).map(Into::into),installed:o.get("installed").and_then(Value::as_bool).unwrap_or(false)}) }).collect() }
-pub fn parse_dnf4_table(input: &str) -> Result<Vec<DnfPackage>, DnfError> { input.lines().enumerate().filter(|(_,l)|!l.trim().is_empty()).map(|(n,l)| { let f:Vec<_>=l.split('\t').collect(); if f.len()<7{return Err(DnfError::MalformedTable{line:n+1,reason:"expected seven tab-separated fields"})} if f[0].trim().is_empty()||f[2].trim().is_empty(){return Err(DnfError::MalformedTable{line:n+1,reason:"name/version is empty"})} Ok(DnfPackage{name:f[0].into(),epoch:(!f[1].is_empty()).then(||f[1].into()),version:f[2].into(),release:(!f[3].is_empty()).then(||f[3].into()),arch:(!f[4].is_empty()).then(||f[4].into()),repo:(!f[5].is_empty()).then(||f[5].into()),installed:matches!(f[6],"1"|"installed"|"@System")}) }).collect() }
-pub fn parse_check_update_status(code:i32)->Result<bool,i32>{match code{0=>Ok(false),100=>Ok(true),x=>Err(x)}}
-#[derive(Clone, Debug)] pub struct DnfBackend { pub generation:DnfGeneration, pub program:PathBuf }
-impl DnfBackend { pub fn from_paths(generation:DnfGeneration,program:impl Into<PathBuf>)->Self{Self{generation,program:program.into()}} pub fn detect_from_version(has_dnf5:bool,output:&str)->DnfGeneration{if has_dnf5||output.lines().any(|l|l.contains("dnf5")){DnfGeneration::Dnf5}else{DnfGeneration::Dnf4}} pub fn detect(path:Option<&OsStr>)->Result<Self,DnfError>{let r=ExecutableResolver::from_path(path);if let Some(p)=r.resolve(OsStr::new("dnf5")){return Ok(Self::from_paths(DnfGeneration::Dnf5,p))}let p=r.resolve(OsStr::new("dnf")).ok_or(DnfError::MissingExecutable("dnf"))?;Ok(Self::from_paths(DnfGeneration::Dnf4,p))} fn id(&self)->BackendId{match self.generation{DnfGeneration::Dnf5=>BackendId::Dnf5,DnfGeneration::Dnf4=>BackendId::Dnf4}} fn read<const N:usize>(&self,a:[&str;N])->CommandPlan{let mut p=CommandPlan::new(self.program.clone()).with_backend(self.id()).with_locale("C").with_privilege(CommandPrivilege::User);p.args.extend(a.into_iter().map(OsString::from));p} fn elevated<const N:usize>(&self,a:[&str;N])->CommandPlan{self.read(a).with_privilege(CommandPrivilege::Elevated)} pub fn list_plan(&self)->CommandPlan{match self.generation{DnfGeneration::Dnf5=>self.read(["list","--json"]),DnfGeneration::Dnf4=>self.read(["repoquery","--qf","%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0"] )}} pub fn installed_plan(&self)->CommandPlan{match self.generation{DnfGeneration::Dnf5=>self.read(["list","--installed","--json"]),DnfGeneration::Dnf4=>self.read(["repoquery","--installed","--qf","%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1"] )}} pub fn updates_plan(&self)->CommandPlan{match self.generation{DnfGeneration::Dnf5=>self.read(["list","--upgrades","--json"]),DnfGeneration::Dnf4=>self.read(["repoquery","--upgrades","--qf","%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0"] )}} pub fn details_plan(&self,p:&PackageId)->Result<CommandPlan,DnfError>{if p.as_str().trim().is_empty(){return Err(DnfError::InvalidPackageId)}Ok(match self.generation{DnfGeneration::Dnf5=>self.read(["info",p.as_str()]),DnfGeneration::Dnf4=>self.read(["repoquery","--info",p.as_str()])})} pub fn system_upgrade_plan(&self)->CommandPlan{self.elevated(["upgrade","--refresh"])} pub fn transaction(&self,op:WriteOperation)->Result<TransactionPlan,DnfError>{let verb=match &op{WriteOperation::Install{..}|WriteOperation::Upgrade{..}=>"install",WriteOperation::Remove{..}=>"remove",WriteOperation::SystemUpgrade=>return Ok(TransactionPlan{backend:self.id(),kind:PackageKind::System,scope:PackageScope::System,operation:op,command:self.system_upgrade_plan(),packages:Vec::new()}),_=>return Err(DnfError::UnsupportedOperation)};let ps=op.packages();if ps.is_empty()||ps.iter().any(|p|p.native_key.as_str().trim().is_empty()){return Err(DnfError::InvalidPackageId)}let mut c=self.elevated([verb]);c.args.extend(ps.iter().map(|p|OsString::from(p.native_key.as_str())));Ok(TransactionPlan{backend:self.id(),kind:PackageKind::System,scope:PackageScope::System,operation:op,command:c,packages:ps.to_vec()})} }
-#[cfg(test)] mod tests { use super::*; use crate::{PackageIdentity,WriteOperation}; fn id(n:&str,b:BackendId)->PackageIdentity{PackageIdentity::new(b,PackageKind::System,PackageScope::System,PackageId::new(n).unwrap())} #[test]fn json_and_errors(){let p=parse_dnf5_json(r#"[{"name":"bash","version":"5.2","arch":"x86_64","future":true}]"#).unwrap();assert_eq!(p[0].name,"bash");assert!(matches!(parse_dnf5_json(r#"[{"name":"bash"}]"#),Err(DnfError::MissingField{field:"version",..})));} #[test]fn table_and_exit(){assert!(parse_dnf4_table("bash\t0\t5.2\t1\tx86_64\tfedora\t1\n").unwrap()[0].installed);assert_eq!(parse_check_update_status(100),Ok(true));assert_eq!(parse_check_update_status(2),Err(2));} #[test]fn exact_plans(){for(g,bid)in[(DnfGeneration::Dnf5,BackendId::Dnf5),(DnfGeneration::Dnf4,BackendId::Dnf4)]{let b=DnfBackend::from_paths(g,"/usr/bin/dnf");let p=b.transaction(WriteOperation::Install{packages:vec![id("bash",bid)]}).unwrap().command;assert_eq!(p.privilege,CommandPrivilege::Elevated);assert_eq!(p.args,["install","bash"]);assert_eq!(b.system_upgrade_plan().args,["upgrade","--refresh"]);}} }
+fn records(value: Value) -> Vec<Value> {
+    match value {
+        Value::Array(v) => v,
+        Value::Object(mut o) => ["packages", "results", "items"]
+            .iter()
+            .find_map(|k| o.remove(*k))
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_else(|| vec![Value::Object(o)]),
+        _ => Vec::new(),
+    }
+}
+fn field<'a>(o: &'a serde_json::Map<String, Value>, names: &[&str]) -> Option<&'a str> {
+    names.iter().find_map(|n| o.get(*n).and_then(Value::as_str))
+}
+pub fn parse_dnf5_json(input: &str) -> Result<Vec<DnfPackage>, DnfError> {
+    let value: Value =
+        serde_json::from_str(input).map_err(|e| DnfError::MalformedJson(e.to_string()))?;
+    records(value)
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let o = v.as_object().ok_or_else(|| {
+                DnfError::MalformedJson(format!("record {} is not an object", i + 1))
+            })?;
+            let name = field(o, &["name"]).filter(|x| !x.trim().is_empty()).ok_or(
+                DnfError::MissingField {
+                    record: i + 1,
+                    field: "name",
+                },
+            )?;
+            let version = field(o, &["version", "evr"])
+                .filter(|x| !x.trim().is_empty())
+                .ok_or(DnfError::MissingField {
+                    record: i + 1,
+                    field: "version",
+                })?;
+            Ok(DnfPackage {
+                name: name.into(),
+                epoch: field(o, &["epoch"]).map(Into::into),
+                version: version.into(),
+                release: field(o, &["release"]).map(Into::into),
+                arch: field(o, &["arch", "architecture"]).map(Into::into),
+                repo: field(o, &["repo", "repository"]).map(Into::into),
+                installed: o.get("installed").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+pub fn parse_dnf4_table(input: &str) -> Result<Vec<DnfPackage>, DnfError> {
+    input
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(n, l)| {
+            let f: Vec<_> = l.split('\t').collect();
+            if f.len() < 7 {
+                return Err(DnfError::MalformedTable {
+                    line: n + 1,
+                    reason: "expected seven tab-separated fields",
+                });
+            }
+            if f[0].trim().is_empty() || f[2].trim().is_empty() {
+                return Err(DnfError::MalformedTable {
+                    line: n + 1,
+                    reason: "name/version is empty",
+                });
+            }
+            Ok(DnfPackage {
+                name: f[0].into(),
+                epoch: (!f[1].is_empty()).then(|| f[1].into()),
+                version: f[2].into(),
+                release: (!f[3].is_empty()).then(|| f[3].into()),
+                arch: (!f[4].is_empty()).then(|| f[4].into()),
+                repo: (!f[5].is_empty()).then(|| f[5].into()),
+                installed: matches!(f[6], "1" | "installed" | "@System"),
+            })
+        })
+        .collect()
+}
+pub fn parse_check_update_status(code: i32) -> Result<bool, i32> {
+    match code {
+        0 => Ok(false),
+        100 => Ok(true),
+        x => Err(x),
+    }
+}
+#[derive(Clone, Debug)]
+pub struct DnfBackend {
+    pub generation: DnfGeneration,
+    pub program: PathBuf,
+}
+impl DnfBackend {
+    pub fn from_paths(generation: DnfGeneration, program: impl Into<PathBuf>) -> Self {
+        Self {
+            generation,
+            program: program.into(),
+        }
+    }
+    pub fn detect_from_version(has_dnf5: bool, output: &str) -> DnfGeneration {
+        if has_dnf5 || output.lines().any(|l| l.contains("dnf5")) {
+            DnfGeneration::Dnf5
+        } else {
+            DnfGeneration::Dnf4
+        }
+    }
+    pub fn detect(path: Option<&OsStr>) -> Result<Self, DnfError> {
+        let r = ExecutableResolver::from_path(path);
+        if let Some(p) = r.resolve(OsStr::new("dnf5")) {
+            return Ok(Self::from_paths(DnfGeneration::Dnf5, p));
+        }
+        let p = r
+            .resolve(OsStr::new("dnf"))
+            .ok_or(DnfError::MissingExecutable("dnf"))?;
+        Ok(Self::from_paths(DnfGeneration::Dnf4, p))
+    }
+    fn id(&self) -> BackendId {
+        match self.generation {
+            DnfGeneration::Dnf5 => BackendId::Dnf5,
+            DnfGeneration::Dnf4 => BackendId::Dnf4,
+        }
+    }
+    fn read<const N: usize>(&self, a: [&str; N]) -> CommandPlan {
+        let mut p = CommandPlan::new(self.program.clone())
+            .with_backend(self.id())
+            .with_locale("C")
+            .with_privilege(CommandPrivilege::User);
+        p.args.extend(a.into_iter().map(OsString::from));
+        p
+    }
+    fn elevated<const N: usize>(&self, a: [&str; N]) -> CommandPlan {
+        self.read(a).with_privilege(CommandPrivilege::Elevated)
+    }
+    pub fn list_plan(&self) -> CommandPlan {
+        match self.generation {
+            DnfGeneration::Dnf5 => self.read(["list", "--json"]),
+            DnfGeneration::Dnf4 => self.read([
+                "repoquery",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+            ]),
+        }
+    }
+    pub fn installed_plan(&self) -> CommandPlan {
+        match self.generation {
+            DnfGeneration::Dnf5 => self.read(["list", "--installed", "--json"]),
+            DnfGeneration::Dnf4 => self.read([
+                "repoquery",
+                "--installed",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1",
+            ]),
+        }
+    }
+    pub fn updates_plan(&self) -> CommandPlan {
+        match self.generation {
+            DnfGeneration::Dnf5 => self.read(["list", "--upgrades", "--json"]),
+            DnfGeneration::Dnf4 => self.read([
+                "repoquery",
+                "--upgrades",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+            ]),
+        }
+    }
+    pub fn details_plan(&self, p: &PackageId) -> Result<CommandPlan, DnfError> {
+        if p.as_str().trim().is_empty() {
+            return Err(DnfError::InvalidPackageId);
+        }
+        Ok(match self.generation {
+            DnfGeneration::Dnf5 => self.read(["info", p.as_str()]),
+            DnfGeneration::Dnf4 => self.read(["repoquery", "--info", p.as_str()]),
+        })
+    }
+    pub fn system_upgrade_plan(&self) -> CommandPlan {
+        self.elevated(["upgrade", "--refresh"])
+    }
+    pub fn transaction(&self, op: WriteOperation) -> Result<TransactionPlan, DnfError> {
+        let verb = match &op {
+            WriteOperation::Install { .. } | WriteOperation::Upgrade { .. } => "install",
+            WriteOperation::Remove { .. } => "remove",
+            WriteOperation::SystemUpgrade => {
+                return Ok(TransactionPlan {
+                    backend: self.id(),
+                    kind: PackageKind::System,
+                    scope: PackageScope::System,
+                    operation: op,
+                    command: self.system_upgrade_plan(),
+                    packages: Vec::new(),
+                })
+            }
+            _ => return Err(DnfError::UnsupportedOperation),
+        };
+        let operation = op.clone();
+        let ps = operation.packages();
+        if ps.is_empty() || ps.iter().any(|p| p.native_key.as_str().trim().is_empty()) {
+            return Err(DnfError::InvalidPackageId);
+        }
+        let mut c = self.elevated([verb]);
+        c.args
+            .extend(ps.iter().map(|p| OsString::from(p.native_key.as_str())));
+        Ok(TransactionPlan {
+            backend: self.id(),
+            kind: PackageKind::System,
+            scope: PackageScope::System,
+            operation: op,
+            command: c,
+            packages: ps.to_vec(),
+        })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PackageIdentity, WriteOperation};
+    fn id(n: &str, b: BackendId) -> PackageIdentity {
+        PackageIdentity::new(
+            b,
+            PackageKind::System,
+            PackageScope::System,
+            PackageId::new(n).unwrap(),
+        )
+    }
+    #[test]
+    fn json_and_errors() {
+        let p =
+            parse_dnf5_json(r#"[{"name":"bash","version":"5.2","arch":"x86_64","future":true}]"#)
+                .unwrap();
+        assert_eq!(p[0].name, "bash");
+        assert!(matches!(
+            parse_dnf5_json(r#"[{"name":"bash"}]"#),
+            Err(DnfError::MissingField {
+                field: "version",
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn table_and_exit() {
+        assert!(parse_dnf4_table("bash\t0\t5.2\t1\tx86_64\tfedora\t1\n").unwrap()[0].installed);
+        assert_eq!(parse_check_update_status(100), Ok(true));
+        assert_eq!(parse_check_update_status(2), Err(2));
+    }
+    #[test]
+    fn exact_plans() {
+        for (g, bid) in [
+            (DnfGeneration::Dnf5, BackendId::Dnf5),
+            (DnfGeneration::Dnf4, BackendId::Dnf4),
+        ] {
+            let b = DnfBackend::from_paths(g, "/usr/bin/dnf");
+            let p = b
+                .transaction(WriteOperation::Install {
+                    packages: vec![id("bash", bid)],
+                })
+                .unwrap()
+                .command;
+            assert_eq!(p.privilege, CommandPrivilege::Elevated);
+            assert_eq!(p.args, ["install", "bash"]);
+            assert_eq!(b.system_upgrade_plan().args, ["upgrade", "--refresh"]);
+        }
+    }
+}
