@@ -122,6 +122,27 @@ fn main() -> Result<()> {
                 evidence.as_deref(),
             )
         }
+        "probe-nix" => {
+            let mut evidence = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--evidence" => {
+                        evidence = Some(PathBuf::from(
+                            args.next().context("--evidence needs a value")?,
+                        ))
+                    }
+                    value => bail!("unknown probe-nix argument: {value}"),
+                }
+            }
+            let probe = probe_nix_image(NIX_IMAGE);
+            let json = render_probe(&probe);
+            write_evidence(evidence.as_deref(), &format!("{json}\n"))?;
+            println!("{json}");
+            if probe.status != 0 {
+                bail!("Nix lane failed with status {}", probe.status);
+            }
+            Ok(())
+        }
         "verify-cloud-image" => verify_cloud_image_lock(),
         "audit-cleanup" => audit_cleanup(),
         "vm-run" => vm_run(),
@@ -140,7 +161,7 @@ fn main() -> Result<()> {
             probe_all(evidence.as_deref())
         }
         _ => bail!(
-            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|all|vm-run|vm-interrupt-test> [options]"
+            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|probe-nix|all|vm-run|vm-interrupt-test> [options]"
         ),
     }
 }
@@ -400,13 +421,7 @@ fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
             "sh", "-ec", "brew --version; printf 'LIST\\n'; brew search --formula hello; printf 'DETAILS\\n'; brew info --json=v2 hello; printf 'INSTALL\\n'; brew install hello; printf 'REMOVE\\n'; brew uninstall hello",
         ],
     ));
-    records.push(probe_optional_image(
-        "nix",
-        NIX_IMAGE,
-        [
-            "sh", "-ec", "nix --version; printf 'LIST\\n'; nix profile list --json; printf 'DETAILS\\n'; nix search --json nixpkgs#hello; printf 'INSTALL\\n'; nix profile install nixpkgs#hello; printf 'REMOVE\\n'; nix profile remove 0",
-        ],
-    ));
+    records.push(probe_nix_image(NIX_IMAGE));
 
     let mut report = String::new();
     let mut failed = Vec::new();
@@ -556,6 +571,216 @@ fn probe_optional_image(lane: &str, image: &str, args: [&str; 3]) -> ProbeOutput
         error,
         cleanup,
     }
+}
+
+const NIX_STORE_URL: &str = "local?state=/tmp/pm-matrix-nix/state&log=/tmp/pm-matrix-nix/log";
+
+fn probe_nix_image(image: &str) -> ProbeOutput {
+    let lane = "nix";
+    let started = Instant::now();
+    let name = format!("pm-matrix-{}-{}", std::process::id(), unix_nanos());
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .unwrap_or(1000);
+    let gid = std::process::Command::new("id")
+        .arg("-g")
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .unwrap_or(uid);
+    let user = format!("{uid}:{gid}");
+    let cleanup_guard = CleanupGuard::new(&name);
+    let run = (|| -> Result<(String, String)> {
+        let output = Command::new("podman")
+            .args([
+                "run",
+                "--detach",
+                "--rm",
+                "--user",
+                &user,
+                "--cap-add",
+                "CAP_DAC_OVERRIDE",
+                "--network",
+                "bridge",
+                "--name",
+                &name,
+                "--env",
+                "HOME=/tmp/pm-matrix-nix/home",
+                "--env",
+                "NIX_STATE_DIR=/tmp/pm-matrix-nix/state",
+                "--env",
+                "NIX_LOG_DIR=/tmp/pm-matrix-nix/log",
+                image,
+                "sh",
+                "-ec",
+                "mkdir -p /tmp/pm-matrix-nix/state /tmp/pm-matrix-nix/log /tmp/pm-matrix-nix/home; sleep 600",
+            ])
+            .output()
+            .context("start non-root Nix container")?;
+        if !output.status.success() {
+            bail!(
+                "podman run exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let exec = |script: &str| -> Result<String> {
+            let output = Command::new("podman")
+                .args(["exec", "--user", &user, &name, "sh", "-ec", script])
+                .output()
+                .with_context(|| format!("run Nix command: {script}"))?;
+            if !output.status.success() {
+                bail!(
+                    "Nix command failed ({}): {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let flags =
+            format!("--extra-experimental-features 'nix-command flakes' --store '{NIX_STORE_URL}'");
+        let version = exec("nix --version")?;
+        let identity = exec(
+            "printf 'uid=%s\\ngid=%s\\nsudo=%s\\n' \"$(id -u)\" \"$(id -g)\" \"$(command -v sudo || true)\"",
+        )?;
+        if !identity
+            .lines()
+            .any(|line| line == format!("uid={uid}").as_str())
+            || !identity
+                .lines()
+                .any(|line| line == format!("gid={gid}").as_str())
+            || !identity.lines().any(|line| line == "sudo=")
+        {
+            bail!("Nix lane identity is not the current user without sudo: {identity:?}");
+        }
+        let before = exec(&format!("nix {flags} profile list --json"))?;
+        let search = exec(&format!(
+            "nix {flags} search --json nixpkgs#hello '^hello$'"
+        ))?;
+        let search_json: serde_json::Value =
+            serde_json::from_str(search.trim()).context("parse nix search JSON")?;
+        if !search_json
+            .as_object()
+            .is_some_and(|packages| packages.keys().any(|key| key.ends_with(".hello")))
+        {
+            bail!("nix search JSON did not contain hello");
+        }
+        exec(&format!("nix {flags} profile install nixpkgs#hello"))?;
+        let after = exec(&format!("nix {flags} profile list --json"))?;
+        let selector = nix_profile_element_selector(&after)?;
+        exec(&format!(
+            "nix {flags} profile remove {}",
+            shell_quote(&selector)
+        ))?;
+        let removed = exec(&format!("nix {flags} profile list --json"))?;
+        let removed_json: serde_json::Value =
+            serde_json::from_str(removed.trim()).context("parse removed Nix profile JSON")?;
+        if !removed_json
+            .get("elements")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
+        {
+            bail!("Nix profile still has elements after removing {selector}");
+        }
+        Ok((
+            format!(
+                "uid/gid/sudo:\n{identity}NIX_VERSION:\n{version}LIST_BEFORE:\n{}SEARCH:\n{}PROFILE_AFTER_INSTALL:\n{}SELECTOR:{selector}\nPROFILE_AFTER_REMOVE:\n{}",
+                before.trim(),
+                search.trim(),
+                after.trim(),
+                removed.trim()
+            ),
+            version.trim().to_owned(),
+        ))
+    })();
+    drop(cleanup_guard);
+    let cleanup = cleanup_check(&name);
+    match run {
+        Ok((stdout, version)) => ProbeOutput {
+            lane: lane.into(),
+            kind: "optional",
+            status: 0,
+            lane_status: "pass",
+            image: Some(image.into()),
+            manifest_digest: image.split('@').nth(1).map(str::to_owned),
+            architecture: Some("amd64".into()),
+            package_manager: Some(lane.into()),
+            package_manager_version: Some(version),
+            elapsed_ms: started.elapsed().as_millis(),
+            stdout,
+            stderr: String::new(),
+            error: None,
+            cleanup,
+        },
+        Err(error) => ProbeOutput {
+            lane: lane.into(),
+            kind: "optional",
+            status: 1,
+            lane_status: "fail",
+            image: Some(image.into()),
+            manifest_digest: image.split('@').nth(1).map(str::to_owned),
+            architecture: Some("amd64".into()),
+            package_manager: Some(lane.into()),
+            package_manager_version: None,
+            elapsed_ms: started.elapsed().as_millis(),
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some(error.to_string()),
+            cleanup,
+        },
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn nix_profile_element_selector(json: &str) -> Result<String> {
+    let document: serde_json::Value =
+        serde_json::from_str(json).context("parse nix profile JSON")?;
+    let elements = document
+        .get("elements")
+        .and_then(serde_json::Value::as_object)
+        .context("Nix profile JSON missing object 'elements'")?;
+    if elements.is_empty() {
+        bail!("Nix profile has no active element");
+    }
+    elements
+        .iter()
+        .find_map(|(selector, element)| {
+            let active = element
+                .get("active")
+                .and_then(serde_json::Value::as_bool)
+                .is_some_and(|active| active);
+            let hello = element
+                .get("originalUrl")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|url| url.contains("hello"))
+                || element
+                    .get("attrPath")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|path| path.ends_with(".hello"));
+            if active && hello && !selector.is_empty() && selector.parse::<usize>().is_err() {
+                Some(selector.clone())
+            } else {
+                None
+            }
+        })
+        .context("Nix profile JSON has no stable active hello element selector")
 }
 
 fn failed_probe(
@@ -1462,5 +1687,38 @@ mod tests {
             parse_manager_version("apk", "apk-tools 2.14.4, compiled for x86_64.\n").unwrap();
         assert!(validate_manager_version("apk", "2.14.4-r0", Some(&observed)).is_err());
         assert!(validate_manager_version("apk", "2.14.4", Some(&observed)).is_ok());
+    }
+
+    #[test]
+    fn nix_profile_selector_uses_stable_element_id() {
+        let json = r#"{"version":3,"elements":{"nixpkgs#hello":{"active":true,"originalUrl":"nixpkgs#hello","storePaths":["/tmp/nix/store/hello"]}}}"#;
+        assert_eq!(nix_profile_element_selector(json).unwrap(), "nixpkgs#hello");
+    }
+
+    #[test]
+    fn nix_profile_selector_rejects_missing_or_index_only_schema() {
+        assert!(nix_profile_element_selector(r#"{"version":3}"#).is_err());
+        assert!(
+            nix_profile_element_selector(
+                r#"{"version":3,"elements":{"0":{"active":true,"originalUrl":"nixpkgs#hello"}}}"#
+            )
+            .is_err()
+        );
+        assert!(nix_profile_element_selector(
+            r#"{"version":3,"elements":{"nixpkgs#hello":{"active":false,"originalUrl":"nixpkgs#hello"}}}"#
+        )
+        .is_err());
+        assert!(
+            nix_profile_element_selector(
+                r#"{"version":3,"elements":{"nixpkgs#hello":{"originalUrl":"nixpkgs#hello"}}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn nix_profile_selector_reports_invalid_json() {
+        let error = nix_profile_element_selector("not-json").unwrap_err();
+        assert!(error.to_string().contains("parse nix profile JSON"));
     }
 }
