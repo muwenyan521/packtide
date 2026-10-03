@@ -1,0 +1,1 @@
+[{"name":"1","attrPath":"hello","pname":"hello","originalUrl":"github:NixOS/nixpkgs/locked","storePaths":["/nix/store/aaa-hello","/nix/store/bbb-hello-bin"],"active":true,"futureField":true},{"name":"2","attrPath":"inactive","original_url":"path:/tmp/flake","store_paths":[],"active":false}]
