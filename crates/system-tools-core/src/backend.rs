@@ -663,6 +663,8 @@ pub trait PackageBackend {
                     capability: operation.capability(),
                 });
             }
+            (BackendId::Xbps, WriteOperation::Install { .. })
+            | (BackendId::Xbps, WriteOperation::Remove { .. }) => "-y",
             (_, WriteOperation::Install { .. }) => "-S",
             (_, WriteOperation::Remove { .. }) => "-Rns",
             (_, WriteOperation::Upgrade { .. }) | (_, WriteOperation::SystemUpgrade) => "-Su",
