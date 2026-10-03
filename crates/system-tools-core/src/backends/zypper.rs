@@ -78,9 +78,11 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
     let mut out = Vec::new();
     let mut cur: Option<Record> = None;
     let mut field = None;
+    let mut depth = 0usize;
     loop {
         match r.read_event() {
             Ok(Event::Start(e)) => {
+                depth += 1;
                 let t = lname(e.name().as_ref());
                 if t == "solvable" {
                     cur = Some(Record {
@@ -126,17 +128,17 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
                         .decode()
                         .map_err(|e| ZypperError::MalformedXml(e.to_string()))?
                         .into_owned();
-                    match f {
-                        "name" => x.name = Some(v),
-                        "version" | "evr" => x.version = Some(v),
-                        "arch" | "architecture" => x.arch = Some(v),
-                        "repository" | "repo" | "alias" => x.repo = Some(v),
-                        "status" => x.installed = v.eq_ignore_ascii_case("installed"),
-                        "current" => x.current = Some(v),
-                        "candidate" => x.candidate = Some(v),
-                        "type" | "kind" => x.kind = Some(v),
-                        _ => {}
-                    }
+                    append_field(x, f, &v);
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                if let (Some(x), Some(f)) = (cur.as_mut(), field.as_deref()) {
+                    let reference = std::str::from_utf8(&e)
+                        .map_err(|e| ZypperError::MalformedXml(e.to_string()))?;
+                    let escaped = format!("&{reference};");
+                    let value = quick_xml::escape::unescape(&escaped)
+                        .map_err(|e| ZypperError::MalformedXml(e.to_string()))?;
+                    append_field(x, f, &value);
                 }
             }
             Ok(Event::End(e)) => {
@@ -145,14 +147,46 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
                 {
                     out.push(x)
                 }
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    ZypperError::MalformedXml("unexpected closing element".into())
+                })?;
                 field = None
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                if depth != 0 {
+                    return Err(ZypperError::MalformedXml("truncated XML document".into()));
+                }
+                break;
+            }
             Err(e) => return Err(ZypperError::MalformedXml(e.to_string())),
             _ => {}
         }
     }
     Ok(out)
+}
+fn append_field(record: &mut Record, field: &str, value: &str) {
+    match field {
+        "name" => record.name.get_or_insert_with(String::new).push_str(value),
+        "version" | "evr" => record
+            .version
+            .get_or_insert_with(String::new)
+            .push_str(value),
+        "arch" | "architecture" => record.arch.get_or_insert_with(String::new).push_str(value),
+        "repository" | "repo" | "alias" => {
+            record.repo.get_or_insert_with(String::new).push_str(value)
+        }
+        "status" => record.installed = value.eq_ignore_ascii_case("installed"),
+        "current" => record
+            .current
+            .get_or_insert_with(String::new)
+            .push_str(value),
+        "candidate" => record
+            .candidate
+            .get_or_insert_with(String::new)
+            .push_str(value),
+        "type" | "kind" => record.kind.get_or_insert_with(String::new).push_str(value),
+        _ => {}
+    }
 }
 fn package(r: &Record) -> bool {
     r.kind
@@ -300,5 +334,111 @@ impl ZypperBackend {
             command: c,
             packages: ps.to_vec(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_consumer_decodes_entities_preserves_package_metadata_and_filters_other_solvables() {
+        let packages = parse_search_xml(include_str!(
+            "../../../../tests/package-managers/fixtures/zypper/search.xml"
+        ))
+        .unwrap();
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "lib&foo");
+        assert_eq!(packages[0].version, "1.0");
+        assert_eq!(packages[0].architecture.as_deref(), Some("x86_64"));
+        assert_eq!(packages[0].repository.as_deref(), Some("repo-oss"));
+        assert!(packages[0].installed);
+        println!("packages={packages:?}");
+
+        let updates = parse_updates_xml(include_str!(
+            "../../../../tests/package-managers/fixtures/zypper/updates.xml"
+        ))
+        .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].current.as_deref(), Some("1.0"));
+        assert_eq!(updates[0].candidate, "1.1");
+        println!("updates={updates:?}");
+    }
+
+    #[test]
+    fn plans_keep_read_privilege_and_exact_write_argv() {
+        let backend = ZypperBackend::from_paths("/fake/usr/bin/zypper");
+        let search = backend.search_plan("lib;not-a-shell-command");
+        assert_eq!(
+            search.args,
+            [
+                "--xmlout",
+                "search",
+                "-s",
+                "-t",
+                "package",
+                "lib;not-a-shell-command"
+            ]
+        );
+        assert_eq!(search.privilege, CommandPrivilege::User);
+        assert_eq!(
+            backend
+                .details_plan(&PackageId::new("bash").unwrap())
+                .unwrap()
+                .args,
+            ["--xmlout", "info", "bash"]
+        );
+        assert_eq!(backend.updates_plan().args, ["--xmlout", "list-updates"]);
+        assert_eq!(backend.refresh_plan().args, ["refresh"]);
+        assert_eq!(backend.refresh_plan().privilege, CommandPrivilege::Elevated);
+        assert_eq!(backend.system_upgrade_plan().args, ["update"]);
+
+        for (operation, verb) in [
+            (
+                WriteOperation::Install {
+                    packages: vec![package_identity("bash")],
+                },
+                "install",
+            ),
+            (
+                WriteOperation::Remove {
+                    packages: vec![package_identity("bash")],
+                },
+                "remove",
+            ),
+        ] {
+            let plan = backend.transaction(operation).unwrap();
+            assert_eq!(plan.command.args, [verb, "bash"]);
+            assert_eq!(plan.command.privilege, CommandPrivilege::Elevated);
+            println!("transaction={:?}", plan.command);
+        }
+    }
+
+    #[test]
+    fn malformed_truncated_and_missing_fields_fail() {
+        assert!(matches!(
+            parse_search_xml("<root><solvable"),
+            Err(ZypperError::MalformedXml(_))
+        ));
+        assert!(matches!(
+            parse_search_xml("<root><solvable type=\"package\"><name>x</name>"),
+            Err(ZypperError::MalformedXml(_))
+        ));
+        assert!(matches!(
+            parse_search_xml("<root><solvable type=\"package\"><name>x</name></solvable></root>"),
+            Err(ZypperError::MissingField {
+                field: "version",
+                ..
+            })
+        ));
+    }
+
+    fn package_identity(name: &str) -> crate::PackageIdentity {
+        crate::PackageIdentity::new(
+            BackendId::Zypper,
+            PackageKind::System,
+            PackageScope::System,
+            PackageId::new(name).unwrap(),
+        )
     }
 }
