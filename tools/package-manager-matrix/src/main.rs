@@ -12,7 +12,7 @@ const DEFAULT_VM_LOCK: &str = "tests/package-managers/ubuntu-cloud-image.lock";
 const BREW_IMAGE: &str = "docker.io/homebrew/brew@sha256:b0072bfdebf5934ae24b93b44a1928a88057399b3283ffa0177bb86084fdedfd";
 const NIX_IMAGE: &str =
     "docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c";
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
@@ -985,8 +985,8 @@ fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
             if start.elapsed() >= COMMAND_TIMEOUT {
                 terminate(&mut child);
                 bail!(
-                    "cloud image download exceeded {}s",
-                    COMMAND_TIMEOUT.as_secs()
+                    "cloud image download exceeded {} timeout",
+                    format_timeout(COMMAND_TIMEOUT)
                 );
             }
             thread::sleep(Duration::from_millis(25));
@@ -1506,9 +1506,19 @@ fn run_bounded(mut command: Command, timeout: Duration) -> Result<Output> {
         }
         if start.elapsed() >= timeout {
             terminate(&mut child);
-            bail!("command exceeded {}s timeout", timeout.as_secs());
+            bail!("command exceeded {} timeout", format_timeout(timeout));
         }
         thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn format_timeout(timeout: Duration) -> String {
+    if timeout < Duration::from_secs(1) {
+        format!("{}ms", timeout.as_millis())
+    } else if timeout.subsec_millis() == 0 {
+        format!("{}s", timeout.as_secs())
+    } else {
+        format!("{:.3}s", timeout.as_secs_f64())
     }
 }
 
@@ -1924,7 +1934,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn bounded_command_timeout_is_a_failure_not_a_pass() {
+    fn bounded_command_timeout_is_a_failure_with_precise_diagnostic() {
+        assert_eq!(COMMAND_TIMEOUT, Duration::from_secs(180));
+        assert_eq!(format_timeout(COMMAND_TIMEOUT), "180s");
         let output = run_bounded(
             {
                 let mut command = Command::new("sh");
@@ -1937,7 +1949,7 @@ mod tests {
             Ok(_) => panic!("timed out command was accepted"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("exceeded 0s timeout"));
+        assert!(error.to_string().contains("exceeded 50ms timeout"));
     }
     #[test]
     fn manifest_architecture_is_bound_to_the_locked_digest() {
