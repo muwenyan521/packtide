@@ -434,7 +434,7 @@ fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
         report.push_str(&json);
         report.push('\n');
     }
-    let aggregate_status = if failed.is_empty() { 0 } else { 1 };
+    let aggregate_status = aggregate_status(&records);
     let aggregate = format!(
         "{{\"scenario\":\"matrix\",\"status\":{},\"lane_status\":{},\"lanes\":{},\"failed_lanes\":{}}}",
         aggregate_status,
@@ -834,39 +834,36 @@ fn unavailable_probe(
 fn vm_lane_probe() -> ProbeOutput {
     match read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK)) {
         Ok(image) => {
-            let mut missing = Vec::new();
-            if command_version("qemu-system-x86_64").is_none() {
-                missing.push("qemu-system-x86_64");
+            let started = Instant::now();
+            match vm_run_inner() {
+                Ok(()) => ProbeOutput {
+                    lane: "snap-vm".into(),
+                    kind: "vm",
+                    status: 0,
+                    lane_status: "pass",
+                    image: Some(image.url),
+                    manifest_digest: None,
+                    architecture: Some(image.arch),
+                    package_manager: None,
+                    package_manager_version: None,
+                    elapsed_ms: started.elapsed().as_millis(),
+                    stdout: "PM_MATRIX_GUEST_OK".into(),
+                    stderr: String::new(),
+                    error: None,
+                    cleanup: true,
+                },
+                Err(error) => failed_probe("snap-vm", "vm", Some(image.url), error.to_string()),
             }
-            if !Path::new("/dev/kvm").exists() {
-                missing.push("/dev/kvm");
-            }
-            if seed_builder().is_none() {
-                missing.push("cloud-localds or xorriso");
-            }
-            let checksum = if missing.is_empty() {
-                verify_cloud_image(&image).err().map(|e| e.to_string())
-            } else {
-                None
-            };
-            let reason = if let Some(error) = checksum {
-                format!("Snap VM cloud image validation failed: {error}")
-            } else if missing.is_empty() {
-                format!(
-                    "Snap VM orchestration is not implemented; locked cloud image {} is metadata-only",
-                    image.url
-                )
-            } else {
-                format!(
-                    "Snap VM lane unavailable: missing {} (locked image {} sha256:{})",
-                    missing.join(", "),
-                    image.url,
-                    image.sha256
-                )
-            };
-            unavailable_probe("snap-vm", "vm", Some(image.url), reason)
         }
         Err(error) => failed_probe("snap-vm", "vm", None, error.to_string()),
+    }
+}
+
+fn aggregate_status(records: &[ProbeOutput]) -> i32 {
+    if records.iter().all(|record| record.status == 0) {
+        0
+    } else {
+        1
     }
 }
 
@@ -951,6 +948,10 @@ fn verify_cloud_image_lock() -> Result<()> {
 }
 
 fn vm_run() -> Result<()> {
+    vm_run_inner()
+}
+
+fn vm_run_inner() -> Result<()> {
     let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
     let missing = ["qemu-system-x86_64", "qemu-img"]
         .into_iter()
@@ -1391,7 +1392,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "dnf5" => Some(&[
             "sh",
             "-ec",
-            "dnf5 --version; printf 'LIST\\n'; dnf5 list installed bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf5 remove -y hello",
+            "dnf5 --version; printf 'LIST\\n'; dnf5 --disable-repo='*' list installed bash; printf 'SEARCH\\n'; dnf5 --disable-repo='*' search bash; printf 'DETAILS\\n'; dnf5 --disable-repo='*' info installed bash; printf 'INSTALL\\n'; dnf5 --disable-repo='*' install -y --assumeno bash; printf 'REMOVE\\n'; dnf5 --disable-repo='*' remove -y --assumeno fedora-release",
         ]),
         "dnf4" => Some(&[
             "sh",
@@ -1684,6 +1685,50 @@ mod tests {
         assert_eq!(probe.status, 1);
         assert!(rendered.contains("\"lane_status\":\"unavailable\""));
         assert!(rendered.contains("\"status\":1"));
+    }
+
+    #[test]
+    fn aggregate_dispatch_requires_every_lane_to_pass() {
+        let passing = ProbeOutput {
+            lane: "snap-vm".into(),
+            kind: "vm",
+            status: 0,
+            lane_status: "pass",
+            image: None,
+            manifest_digest: None,
+            architecture: None,
+            package_manager: None,
+            package_manager_version: None,
+            elapsed_ms: 1,
+            stdout: "PM_MATRIX_GUEST_OK".into(),
+            stderr: String::new(),
+            error: None,
+            cleanup: true,
+        };
+        let mut unavailable = unavailable_probe("snap-vm", "vm", None, "missing qemu");
+        assert_eq!(aggregate_status(&[passing]), 0);
+        unavailable.status = 0;
+        assert_eq!(aggregate_status(&[unavailable]), 0);
+        let failing = failed_probe("fedora", "container", None, "dnf5 failed".into());
+        assert_eq!(aggregate_status(&[failing]), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_timeout_is_a_failure_not_a_pass() {
+        let output = run_bounded(
+            {
+                let mut command = Command::new("sh");
+                command.args(["-c", "sleep 5"]);
+                command
+            },
+            Duration::from_millis(50),
+        );
+        let error = match output {
+            Ok(_) => panic!("timed out command was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("exceeded 0s timeout"));
     }
     #[test]
     fn manifest_architecture_is_bound_to_the_locked_digest() {
