@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::io::IsTerminal;
 use std::process::Command;
 use system_tools_core::{
-    BackendId, BuiltinBackend, ExecutableResolver, PackageBackend, PackageId, PackageIdentity,
+    BackendId, BackendRegistry, ExecutableResolver, PackageBackend, PackageId, PackageIdentity,
     PackageScope, TransactionAction, command_exists, run_command_plan,
 };
 
@@ -36,6 +36,7 @@ pub(crate) fn execute_package_typed(
     packages: &[PackageIdentity],
 ) -> Result<()> {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let registry = BackendRegistry::default();
     for backend in [BackendId::Pacman, BackendId::Paru, BackendId::Yay] {
         let selected = packages
             .iter()
@@ -57,10 +58,13 @@ pub(crate) fn execute_package_typed(
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             );
         }
-        let plan = BuiltinBackend::new(backend).write_with_resolver(
-            system_tools_core::WriteOperation::transaction(action, selected.clone()),
-            &resolver,
-        )?;
+        let plan = registry
+            .backend(backend)
+            .expect("builtin backend")
+            .write_with_resolver(
+                system_tools_core::WriteOperation::transaction(action, selected.clone()),
+                &resolver,
+            )?;
         let targets = selected
             .iter()
             .map(|p| p.native_key.as_str())
@@ -82,13 +86,16 @@ pub(crate) fn execute_package_typed(
 
 pub(crate) fn execute_flatpak(packages: &[PackageIdentity]) -> Result<()> {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
-    let plan = BuiltinBackend::new(BackendId::Flatpak).write_with_resolver(
-        system_tools_core::WriteOperation::transaction(
-            TransactionAction::Remove,
-            packages.to_vec(),
-        ),
-        &resolver,
-    )?;
+    let plan = BackendRegistry::default()
+        .backend(BackendId::Flatpak)
+        .expect("builtin backend")
+        .write_with_resolver(
+            system_tools_core::WriteOperation::transaction(
+                TransactionAction::Remove,
+                packages.to_vec(),
+            ),
+            &resolver,
+        )?;
     let targets = packages
         .iter()
         .map(|p| p.native_key.as_str())
