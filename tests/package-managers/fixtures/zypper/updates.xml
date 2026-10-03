@@ -1,0 +1,1 @@
+<z:stream xmlns:z="urn:z"><z:solvable type="package" current="1.0" candidate="1.1" repo="repo-update"><z:name>bash</z:name><z:arch>x86_64</z:arch></z:solvable><z:solvable type="product"><z:name>Leap</z:name></z:solvable></z:stream>
