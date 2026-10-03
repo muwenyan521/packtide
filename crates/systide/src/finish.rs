@@ -12,14 +12,18 @@ pub(crate) fn run(lang: Lang) -> Result<()> {
     } else {
         log_warn(lang, msg(lang, "flatpak_skip"));
     }
-    if resolver.resolve(OsStr::new("grub-mkconfig")).is_some() {
+    if crate::operations::detect_manager(lang).ok() == Some(system_tools_core::BackendId::Pacman)
+        && resolver.resolve(OsStr::new("grub-mkconfig")).is_some()
+    {
         log_info(lang, msg(lang, "grub_step"));
         if run_privileged(&["grub-mkconfig", "-o", "/boot/grub/grub.cfg"]).is_ok() {
             log_success(lang, msg(lang, "grub_ok"));
         } else {
             log_warn(lang, msg(lang, "grub_fail"));
         }
-    } else {
+    } else if crate::operations::detect_manager(lang).ok()
+        == Some(system_tools_core::BackendId::Pacman)
+    {
         log_warn(lang, msg(lang, "grub_skip"));
     }
     signal_waybar();

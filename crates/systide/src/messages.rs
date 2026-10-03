@@ -29,18 +29,6 @@ pub(crate) fn msg_with(lang: Lang, key: &str, replacements: &[(&str, String)]) -
     value
 }
 
-pub(crate) fn backend_label(lang: Lang, backend: system_tools_core::NativeBackend) -> &'static str {
-    let key = match backend {
-        system_tools_core::NativeBackend::Pacman => "backend.pacman",
-        system_tools_core::NativeBackend::Apt => "backend.apt",
-        system_tools_core::NativeBackend::Dnf => "backend.dnf",
-        system_tools_core::NativeBackend::Zypper => "backend.zypper",
-        system_tools_core::NativeBackend::Apk => "backend.apk",
-        system_tools_core::NativeBackend::Xbps => "backend.xbps",
-    };
-    msg(lang, key)
-}
-
 pub(crate) fn source_label(lang: Lang, source: &str) -> &'static str {
     let key = match source {
         "pacman" => "source.pacman",
@@ -69,8 +57,4 @@ pub(crate) fn log_success(lang: Lang, text: &str) {
 
 pub(crate) fn log_warn(lang: Lang, text: &str) {
     println!("\x1b[1;33m[{}]\x1b[0m {text}", msg(lang, "label_warn"));
-}
-
-pub(crate) fn log_error(lang: Lang, text: &str) {
-    println!("\x1b[1;31m[{}]\x1b[0m {text}", msg(lang, "label_error"));
 }

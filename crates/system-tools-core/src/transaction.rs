@@ -1,9 +1,7 @@
 use std::ffi::OsStr;
 use std::process::ExitStatus;
 
-use crate::{
-    BackendError, BackendId, CapabilitySet, CommandPlan, ExecutableResolver, run_command_plan,
-};
+use crate::{BackendError, BackendId, CommandPlan, ExecutableResolver, run_command_plan};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandPrivilege {
@@ -44,12 +42,46 @@ pub fn package_upgrade_command(
             args: &["update"],
             privilege: PackageUpgradePrivilege::User,
         },
-        backend => {
-            return Err(BackendError::UnsupportedCapability {
-                backend,
-                capability: CapabilitySet::SYSTEM_UPGRADE,
-            });
-        }
+        BackendId::Apt => PackageUpgradeCommand {
+            program: "apt-get",
+            args: &["upgrade", "-y"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Dnf5 | BackendId::Dnf4 => PackageUpgradeCommand {
+            program: "dnf",
+            args: &["upgrade", "-y"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Zypper => PackageUpgradeCommand {
+            program: "zypper",
+            args: &["update", "-y"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Apk => PackageUpgradeCommand {
+            program: "apk",
+            args: &["upgrade"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Xbps => PackageUpgradeCommand {
+            program: "xbps-install",
+            args: &["-Su"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Snap => PackageUpgradeCommand {
+            program: "snap",
+            args: &["refresh"],
+            privilege: PackageUpgradePrivilege::User,
+        },
+        BackendId::Brew => PackageUpgradeCommand {
+            program: "brew",
+            args: &["upgrade"],
+            privilege: PackageUpgradePrivilege::User,
+        },
+        BackendId::Nix => PackageUpgradeCommand {
+            program: "nix",
+            args: &["profile", "upgrade", ".*"],
+            privilege: PackageUpgradePrivilege::User,
+        },
     };
     Ok(command)
 }
@@ -143,7 +175,7 @@ mod tests {
         PackageUpgradePrivilege, package_upgrade_command, package_upgrade_command_for,
         run_package_upgrade, run_package_upgrade_with_resolver,
     };
-    use crate::{BackendError, BackendId, CapabilitySet};
+    use crate::BackendId;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -185,7 +217,7 @@ mod tests {
 
     #[test]
     fn typed_upgrade_command_rejects_unimplemented_backends_without_sentinel() {
-        let unsupported = [
+        for backend in [
             BackendId::Apt,
             BackendId::Dnf5,
             BackendId::Dnf4,
@@ -195,30 +227,14 @@ mod tests {
             BackendId::Snap,
             BackendId::Brew,
             BackendId::Nix,
-        ];
-
-        for backend in unsupported {
-            assert_eq!(
-                package_upgrade_command_for(backend),
-                Err(BackendError::UnsupportedCapability {
-                    backend,
-                    capability: CapabilitySet::SYSTEM_UPGRADE,
-                })
-            );
+        ] {
+            assert!(package_upgrade_command_for(backend).is_ok());
         }
     }
 
     #[test]
     fn typed_upgrade_rejects_unsupported_backend_before_spawn() {
-        let error = run_package_upgrade(BackendId::Apt)
-            .expect_err("APT system upgrade is not implemented by this runner");
-        assert_eq!(
-            error,
-            BackendError::UnsupportedCapability {
-                backend: BackendId::Apt,
-                capability: CapabilitySet::SYSTEM_UPGRADE,
-            }
-        );
+        let _ = run_package_upgrade(BackendId::Apt).expect_err("missing apt-get fixture");
     }
 
     #[test]
