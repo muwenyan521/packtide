@@ -1,12 +1,12 @@
 use anyhow::Result;
 use std::ffi::OsStr;
-use system_tools_core::{ExecutableResolver, run_capture_path, run_privileged};
+use system_tools_core::{BackendId, ExecutableResolver, run_capture_path, run_privileged};
 
 use crate::messages::{Lang, log_info, log_success, log_warn, msg};
 
 pub(crate) fn run(lang: Lang) -> Result<()> {
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
-    if crate::operations::detect_manager(lang).ok() == Some(system_tools_core::BackendId::Pacman)
+    if arch_only_hooks(crate::operations::detect_manager(lang).ok())
         && resolver.resolve(OsStr::new("grub-mkconfig")).is_some()
     {
         log_info(lang, msg(lang, "grub_step"));
@@ -15,14 +15,16 @@ pub(crate) fn run(lang: Lang) -> Result<()> {
         } else {
             log_warn(lang, msg(lang, "grub_fail"));
         }
-    } else if crate::operations::detect_manager(lang).ok()
-        == Some(system_tools_core::BackendId::Pacman)
-    {
+    } else if arch_only_hooks(crate::operations::detect_manager(lang).ok()) {
         log_warn(lang, msg(lang, "grub_skip"));
     }
     signal_waybar();
     log_success(lang, msg(lang, "finish_complete"));
     Ok(())
+}
+
+fn arch_only_hooks(backend: Option<BackendId>) -> bool {
+    backend == Some(BackendId::Pacman)
 }
 
 fn signal_waybar() {
@@ -40,6 +42,13 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
     use system_tools_core::BackendId;
+
+    #[test]
+    fn finish_hooks_do_not_run_for_non_arch_or_optional_updates() {
+        assert!(!arch_only_hooks(Some(BackendId::Apt)));
+        assert!(!arch_only_hooks(Some(BackendId::Flatpak)));
+        assert!(arch_only_hooks(Some(BackendId::Pacman)));
+    }
 
     #[test]
     fn flatpak_is_updated_once_when_finish_follows_optional_update() {
