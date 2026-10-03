@@ -1,0 +1,2 @@
+libfoo-bar	2:1.4.0-r3	x86_64	alpine-main	busybox,world	world
+curl-mini	8.10.1-r0	x86_64	alpine-community	
