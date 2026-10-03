@@ -586,16 +586,16 @@ fn verify_cloud_image(image: &CloudImage) -> Result<()> {
     let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
     let result = download_cloud_image(image, &path);
     let cleanup = fs::remove_file(&path);
-    if let Err(error) = cleanup {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(error).context("remove cloud image temp file");
-        }
+    if let Err(error) = cleanup
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error).context("remove cloud image temp file");
     }
     result
 }
 
 fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
-    let result = (|| {
+    (|| {
         let mut child = Command::new("curl")
             .args([
                 "--fail",
@@ -645,8 +645,7 @@ fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
             );
         }
         Ok(())
-    })();
-    result
+    })()
 }
 
 fn verify_cloud_image_lock() -> Result<()> {
@@ -1032,7 +1031,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "dnf5" => Some(&[
             "sh",
             "-ec",
-            "dnf5 --version; printf 'LIST\\n'; dnf5 list --available bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf5 remove -y hello",
+            "set -eu; dnf5 --version; printf 'LIST\\n'; dnf5 list --available bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'BEFORE\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello unexpectedly preinstalled' >&2; exit 1; fi; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; rpm -q hello; printf 'REMOVE\\n'; dnf5 remove -y hello; printf 'AFTER\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello remained installed after remove' >&2; exit 1; fi",
         ]),
         "dnf4" => Some(&[
             "sh",
@@ -1284,6 +1283,19 @@ mod tests {
             validate_image(image).unwrap();
             assert!(probe_command(&image.manager).is_some(), "{}", image.name);
         }
+    }
+
+    #[test]
+    fn fedora_probe_performs_real_transaction_and_rpm_state_checks() {
+        let command = probe_command("dnf5").expect("Fedora lane is supported");
+        let script = command
+            .iter()
+            .find(|part| part.contains("dnf5 install"))
+            .expect("Fedora probe has a shell transaction");
+        assert!(script.contains("dnf5 install -y"));
+        assert!(!script.contains("--assumeno"));
+        assert!(script.contains("rpm -q hello"));
+        assert!(script.contains("AFTER"));
     }
     #[test]
     fn cloud_image_lock_is_metadata_and_validated() {
