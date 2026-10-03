@@ -8,6 +8,24 @@ const PRIVILEGED_COMMAND_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 const SUDO_SEARCH_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 const DEBUG_TIMINGS_ENV: &str = "SYSTEM_TOOLS_DEBUG_TIMINGS";
 
+const UNSAFE_ENVIRONMENT: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "RUBYLIB",
+    "PERL5LIB",
+    "BASH_ENV",
+    "ENV",
+];
+
+fn scrub_privileged_environment(command: &mut Command) {
+    command.env("PATH", PRIVILEGED_COMMAND_PATH);
+    for variable in UNSAFE_ENVIRONMENT {
+        command.env_remove(variable);
+    }
+}
+
 fn debug_timings_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1" | "true" | "yes"))
 }
@@ -49,19 +67,10 @@ impl PrivilegeRunner {
         S: AsRef<OsStr>,
     {
         let started = Instant::now();
-        let status = Command::new(&self.sudo_path)
-            .args(args)
-            .env("PATH", PRIVILEGED_COMMAND_PATH)
-            .env_remove("LD_PRELOAD")
-            .env_remove("LD_LIBRARY_PATH")
-            .env_remove("PYTHONPATH")
-            .env_remove("PYTHONHOME")
-            .env_remove("RUBYLIB")
-            .env_remove("PERL5LIB")
-            .env_remove("BASH_ENV")
-            .env_remove("ENV")
-            .status()
-            .context("failed to execute sudo")?;
+        let mut command = Command::new(&self.sudo_path);
+        command.args(args);
+        scrub_privileged_environment(&mut command);
+        let status = command.status().context("failed to execute sudo")?;
         report_debug_timing(OsStr::new("sudo"), started, status);
         if !status.success() {
             bail!("sudo exited with {status}");
@@ -71,10 +80,10 @@ impl PrivilegeRunner {
 
     pub fn run_plan(&self, plan: &crate::CommandPlan) -> Result<ExitStatus> {
         let started = Instant::now();
-        let status = Command::new(&self.sudo_path)
-            .arg(&plan.program)
-            .args(&plan.args)
-            .env("PATH", PRIVILEGED_COMMAND_PATH)
+        let mut command = Command::new(&self.sudo_path);
+        command.arg(&plan.program).args(&plan.args);
+        scrub_privileged_environment(&mut command);
+        let status = command
             .apply_plan_environment(plan)
             .status()
             .context("failed to execute sudo")?;

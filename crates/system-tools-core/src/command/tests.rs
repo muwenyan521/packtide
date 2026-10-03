@@ -223,7 +223,8 @@ fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
     write_executable(
         &trusted.join("sudo"),
         &format!(
-            "#!/bin/sh\nprintf '%s\n' \"$@\" > '{}'\n",
+            "#!/bin/sh\nprintf 'PATH=%s\\nLD_PRELOAD=%s\\nLD_LIBRARY_PATH=%s\\n' \"$PATH\" \"${{LD_PRELOAD-<unset>}}\" \"${{LD_LIBRARY_PATH-<unset>}}\" > '{}'\nprintf '%s\\n' \"$@\" >> '{}'\n",
+            elevated_log.display(),
             elevated_log.display()
         ),
     );
@@ -237,7 +238,10 @@ fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
         .expect("run elevated command plan");
     assert_eq!(
         fs::read_to_string(elevated_log).expect("read elevated command log"),
-        format!("{}\n--elevated\n", elevated_plan.program.display())
+        format!(
+            "PATH={PRIVILEGED_COMMAND_PATH}\nLD_PRELOAD=<unset>\nLD_LIBRARY_PATH=<unset>\n{}\n--elevated\n",
+            elevated_plan.program.display()
+        )
     );
     fs::remove_dir_all(fixture).expect("remove command plan fixture");
 }
