@@ -991,8 +991,83 @@ fn vm_run_inner() -> Result<()> {
     let user_data = work.join("user-data");
     let meta_data = work.join("meta-data");
     let seed = work.join("seed.iso");
-    let snap_probe = "set +e; exec >/dev/ttyS0 2>&1; echo PM_MATRIX_GUEST_OK; if ! command -v snap >/dev/null 2>&1; then echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=executable-missing; poweroff -f; exit 0; fi; echo SNAP_FIND; snap find hello-world; find_status=$?; echo SNAP_INFO; snap info hello-world; info_status=$?; echo SNAP_LIST_BEFORE; snap list; list_status=$?; echo SNAP_INSTALL; snap install hello-world; install_status=$?; echo SNAP_LIST_AFTER_INSTALL; snap list hello-world; list_after_status=$?; echo SNAP_REMOVE; snap remove hello-world; remove_status=$?; echo SNAP_LIST_AFTER_REMOVE; snap list hello-world; final_list_status=$?; if [ $find_status -eq 0 ] && [ $info_status -eq 0 ] && [ $list_status -eq 0 ] && [ $install_status -eq 0 ] && [ $list_after_status -eq 0 ] && [ $remove_status -eq 0 ] && [ $final_list_status -ne 0 ]; then echo PM_MATRIX_SNAP_OK; else echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=command-failed find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status; fi; poweroff -f";
-    let user_data_contents = format!("#cloud-config\nruncmd:\n  - [ sh, -c, {:?} ]\n", snap_probe);
+    let snap_probe = r#"#!/bin/sh
+set +e
+exec >/dev/ttyS0 2>&1
+echo PM_MATRIX_GUEST_OK
+
+command -v snap >/dev/null 2>&1
+command_status=$?
+if [ "$command_status" -ne 0 ]; then
+    echo "PM_MATRIX_SNAP_COMMAND name=command-v status=$command_status"
+    echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=executable-missing
+    poweroff -f
+    exit 0
+fi
+
+run_snap_step() {
+    name=$1
+    shift
+    echo "SNAP_$name"
+    "$@" &
+    pid=$!
+    elapsed=0
+    while kill -0 "$pid" >/dev/null 2>&1 && [ "$elapsed" -lt 30 ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        kill "$pid" >/dev/null 2>&1
+        sleep 2
+        kill -KILL "$pid" >/dev/null 2>&1
+        wait "$pid"
+        status=124
+    else
+        wait "$pid"
+        status=$?
+    fi
+    echo "PM_MATRIX_SNAP_COMMAND name=$name status=$status"
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+        timeout_step=$name
+    fi
+    return $status
+}
+
+timeout_step=
+run_snap_step FIND snap find hello-world
+find_status=$?
+run_snap_step INFO snap info hello-world
+info_status=$?
+run_snap_step LIST_BEFORE snap list
+list_status=$?
+run_snap_step INSTALL snap install hello-world
+install_status=$?
+run_snap_step LIST_AFTER_INSTALL snap list hello-world
+list_after_status=$?
+run_snap_step REMOVE snap remove hello-world
+remove_status=$?
+run_snap_step LIST_AFTER_REMOVE snap list hello-world
+final_list_status=$?
+
+echo "PM_MATRIX_SNAP_RESULT find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+if [ "$find_status" -eq 0 ] && [ "$info_status" -eq 0 ] && [ "$list_status" -eq 0 ] && [ "$install_status" -eq 0 ] && [ "$list_after_status" -eq 0 ] && [ "$remove_status" -eq 0 ] && [ "$final_list_status" -ne 0 ]; then
+    echo PM_MATRIX_SNAP_OK
+else
+    if [ -n "$timeout_step" ]; then
+        echo "PM_MATRIX_SNAP_UNAVAILABLE command=$timeout_step reason=timeout find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+    else
+        echo "PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=command-failed find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+    fi
+fi
+poweroff -f
+"#;
+    let indented_probe = snap_probe
+        .lines()
+        .map(|line| format!("      {line}\n"))
+        .collect::<String>();
+    let user_data_contents = format!(
+        "#cloud-config\nwrite_files:\n  - path: /var/lib/pm-matrix-snap-probe.sh\n    permissions: '0755'\n    content: |\n{indented_probe}runcmd:\n  - [ sh, /var/lib/pm-matrix-snap-probe.sh ]\n"
+    );
     fs::write(&user_data, user_data_contents)?;
     fs::write(
         &meta_data,
@@ -1041,8 +1116,9 @@ fn vm_run_inner() -> Result<()> {
     cleanup.child = Some(child);
     let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(300))?;
     cleanup.child = None;
+    let guest_serial = guest_serial_summary(&result.stdout);
     if !result.stdout.contains("PM_MATRIX_GUEST_OK") {
-        bail!("guest probe did not report PM_MATRIX_GUEST_OK");
+        bail!("guest probe did not report PM_MATRIX_GUEST_OK (guest serial: {guest_serial})");
     }
     if !result.stdout.contains("PM_MATRIX_SNAP_OK") {
         if let Some(line) = result
@@ -1050,11 +1126,27 @@ fn vm_run_inner() -> Result<()> {
             .lines()
             .find(|line| line.contains("PM_MATRIX_SNAP_UNAVAILABLE"))
         {
-            bail!("guest snap lane unavailable: {line}");
+            bail!("guest snap lane unavailable: {line} (guest serial: {guest_serial})");
         }
-        bail!("guest snap probe did not report PM_MATRIX_SNAP_OK");
+        bail!("guest snap probe did not report PM_MATRIX_SNAP_OK (guest serial: {guest_serial})");
     }
     Ok(())
+}
+
+fn guest_serial_summary(serial: &str) -> String {
+    let summary = serial
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            (line.contains("PM_MATRIX_") || line.starts_with("SNAP_")).then_some(line)
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if summary.is_empty() {
+        "empty".into()
+    } else {
+        summary
+    }
 }
 
 fn qemu_image_format(path: &Path) -> Result<String> {
