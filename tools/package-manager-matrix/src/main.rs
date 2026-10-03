@@ -975,8 +975,11 @@ fn vm_run() -> Result<()> {
     let base = work.join("ubuntu.img");
     download_cloud_image(&image, &base)?;
     let overlay = work.join("overlay.qcow2");
+    let backing_format = qemu_image_format(&base)?;
     let status = Command::new("qemu-img")
-        .args(["create", "-f", "qcow2", "-F", "raw", "-b"])
+        .args(["create", "-f", "qcow2", "-F"])
+        .arg(&backing_format)
+        .arg("-b")
         .arg(&base)
         .arg(&overlay)
         .status()
@@ -1039,6 +1042,25 @@ fn vm_run() -> Result<()> {
         bail!("guest probe did not report PM_MATRIX_GUEST_OK");
     }
     Ok(())
+}
+
+fn qemu_image_format(path: &Path) -> Result<String> {
+    let output = Command::new("qemu-img")
+        .args(["info", "--output=json"])
+        .arg(path)
+        .output()
+        .context("inspect cloud image format")?;
+    if !output.status.success() {
+        bail!("qemu-img info exited with {}", output.status);
+    }
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse qemu-img format metadata")?;
+    let format = info
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .filter(|format| !format.is_empty())
+        .context("qemu-img metadata has no format")?;
+    Ok(format.to_string())
 }
 
 fn vm_unavailable(image: &CloudImage, missing: &[&str]) -> Result<()> {
