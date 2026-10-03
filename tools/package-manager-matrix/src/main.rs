@@ -254,11 +254,13 @@ fn verify_manifest(image: &Image) -> Result<()> {
         .output()
         .with_context(|| format!("inspect manifest {reference}"))?;
     if !output.status.success() {
-        bail!(
-            "manifest inspect failed for {}: {}",
-            reference,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return verify_cached_image(image, &reference).with_context(|| {
+            format!(
+                "manifest inspect failed for {}: {}; cached image verification also failed",
+                reference,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        });
     }
     let body = String::from_utf8_lossy(&output.stdout);
     if body.contains(&image.digest) {
@@ -291,6 +293,54 @@ fn verify_manifest(image: &Image) -> Result<()> {
         || !String::from_utf8_lossy(&inspected.stdout).contains(&image.digest)
     {
         bail!("manifest inspect did not resolve locked digest {reference}");
+    }
+    Ok(())
+}
+
+fn verify_cached_image(image: &Image, reference: &str) -> Result<()> {
+    let exists = Command::new("podman")
+        .args(["image", "exists", reference])
+        .status()
+        .with_context(|| format!("check cached image {reference}"))?;
+    if !exists.success() {
+        bail!("cached image {} is unavailable", reference);
+    }
+    let inspected = Command::new("podman")
+        .args([
+            "image",
+            "inspect",
+            "--format",
+            "{{.Digest}} {{.Architecture}}",
+            reference,
+        ])
+        .output()
+        .with_context(|| format!("inspect cached image {reference}"))?;
+    if !inspected.status.success() {
+        bail!(
+            "cached image inspect failed for {}: {}",
+            reference,
+            String::from_utf8_lossy(&inspected.stderr).trim()
+        );
+    }
+    let inspected_text = String::from_utf8_lossy(&inspected.stdout);
+    let mut fields = inspected_text.split_whitespace();
+    let digest = fields.next().unwrap_or("");
+    let architecture = fields.next().unwrap_or("");
+    if digest != image.digest {
+        bail!(
+            "cached image {} digest mismatch: expected {}, observed {}",
+            reference,
+            image.digest,
+            digest
+        );
+    }
+    if architecture != image.arch {
+        bail!(
+            "cached image {} architecture mismatch: expected {}, observed {}",
+            reference,
+            image.arch,
+            architecture
+        );
     }
     Ok(())
 }
@@ -1784,6 +1834,7 @@ mod tests {
         assert!(script.contains("BEFORE"));
         assert!(script.contains("AFTER"));
     }
+
     #[test]
     fn cloud_image_lock_is_metadata_and_validated() {
         let image = read_cloud_image_lock(
