@@ -263,23 +263,7 @@ fn verify_manifest(image: &Image) -> Result<()> {
         });
     }
     let body = String::from_utf8_lossy(&output.stdout);
-    if body.contains(&image.digest) {
-        if body.contains("\"manifests\"") {
-            match manifest_architecture(&body, &image.digest) {
-                Some(architecture) if architecture == image.arch => {}
-                Some(architecture) => bail!(
-                    "locked digest {} resolves architecture {}, expected {}",
-                    image.digest,
-                    architecture,
-                    image.arch
-                ),
-                None => bail!(
-                    "manifest {} has no platform architecture for locked digest {}",
-                    reference,
-                    image.digest
-                ),
-            }
-        }
+    if verify_remote_manifest(image, &reference, &body)? {
         return Ok(());
     }
     // Podman reports a single-image manifest without an index digest. Verify
@@ -303,7 +287,7 @@ fn verify_cached_image(image: &Image, reference: &str) -> Result<()> {
         .status()
         .with_context(|| format!("check cached image {reference}"))?;
     if !exists.success() {
-        bail!("cached image {} is unavailable", reference);
+        return validate_cached_image_available(reference, false);
     }
     let inspected = Command::new("podman")
         .args([
@@ -323,6 +307,44 @@ fn verify_cached_image(image: &Image, reference: &str) -> Result<()> {
         );
     }
     let inspected_text = String::from_utf8_lossy(&inspected.stdout);
+    validate_cached_image_inspection(image, reference, &inspected_text)
+}
+
+fn verify_remote_manifest(image: &Image, reference: &str, body: &str) -> Result<bool> {
+    if !body.contains(&image.digest) {
+        return Ok(false);
+    }
+    if body.contains("\"manifests\"") {
+        match manifest_architecture(body, &image.digest) {
+            Some(architecture) if architecture == image.arch => {}
+            Some(architecture) => bail!(
+                "locked digest {} resolves architecture {}, expected {}",
+                image.digest,
+                architecture,
+                image.arch
+            ),
+            None => bail!(
+                "manifest {} has no platform architecture for locked digest {}",
+                reference,
+                image.digest
+            ),
+        }
+    }
+    Ok(true)
+}
+
+fn validate_cached_image_available(reference: &str, available: bool) -> Result<()> {
+    if !available {
+        bail!("cached image {} is unavailable", reference);
+    }
+    Ok(())
+}
+
+fn validate_cached_image_inspection(
+    image: &Image,
+    reference: &str,
+    inspected_text: &str,
+) -> Result<()> {
     let mut fields = inspected_text.split_whitespace();
     let digest = fields.next().unwrap_or("");
     let architecture = fields.next().unwrap_or("");
@@ -1761,6 +1783,19 @@ fn unix_nanos() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_image() -> Image {
+        Image {
+            name: "test".into(),
+            registry: "registry.example/test".into(),
+            tag: "stable".into(),
+            digest: "sha256:locked".into(),
+            arch: "amd64".into(),
+            manager: "test-manager".into(),
+            version: "1.0".into(),
+        }
+    }
+
     #[test]
     fn digest_validation_rejects_bad_values() {
         assert!(validate_digest("sha256:bad").is_err());
@@ -1911,6 +1946,57 @@ mod tests {
             manifest_architecture(body, "sha256:right").as_deref(),
             Some("amd64")
         );
+    }
+
+    #[test]
+    fn remote_manifest_with_locked_digest_and_architecture_is_authoritative() {
+        let image = test_image();
+        let body = r#"
+            "manifests": [
+              {
+                "digest": "sha256:locked",
+                "architecture": "amd64"
+              }
+            ]
+        "#;
+        assert!(verify_remote_manifest(&image, "registry.example/test:stable", body).unwrap());
+    }
+
+    #[test]
+    fn cached_image_requires_exact_locked_digest_and_architecture() {
+        let image = test_image();
+        assert!(
+            validate_cached_image_inspection(
+                &image,
+                "registry.example/test:stable",
+                "sha256:locked amd64\n"
+            )
+            .is_ok()
+        );
+        let digest_error = validate_cached_image_inspection(
+            &image,
+            "registry.example/test:stable",
+            "sha256:other amd64\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(digest_error.contains("digest mismatch"));
+        let architecture_error = validate_cached_image_inspection(
+            &image,
+            "registry.example/test:stable",
+            "sha256:locked arm64\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(architecture_error.contains("architecture mismatch"));
+    }
+
+    #[test]
+    fn missing_cached_image_remains_a_failure() {
+        let error = validate_cached_image_available("registry.example/test:stable", false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cached image registry.example/test:stable is unavailable"));
     }
     #[test]
     fn json_string_escapes_control_characters() {
