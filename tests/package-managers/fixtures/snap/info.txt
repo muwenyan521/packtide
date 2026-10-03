@@ -1,0 +1,12 @@
+name:      hello-world
+summary:   The classic hello world snap
+publisher: canonical
+store-url: https://snapcraft.io/hello-world
+license:   BSD-3-Clause
+description: |
+  A fixture description may contain spaces, punctuation, and blank lines.
+
+  It must not change the package identity.
+channels:
+  latest/stable:    6.4 2026-09-01 (123) 15MB -
+  latest/candidate: 6.5 2026-09-02 (124) 15MB -

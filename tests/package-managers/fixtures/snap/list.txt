@@ -1,0 +1,4 @@
+Name         Version  Rev  Tracking       Publisher  Notes
+hello-world  6.4      123  latest/stable  canonical  -
+classic-app  1.2      20   latest/stable  acme       classic
+dev-app      2.0      21   2/stable       acme       devmode
