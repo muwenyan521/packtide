@@ -991,7 +991,9 @@ fn vm_run_inner() -> Result<()> {
     let user_data = work.join("user-data");
     let meta_data = work.join("meta-data");
     let seed = work.join("seed.iso");
-    fs::write(&user_data, b"#cloud-config\nruncmd:\n  - [ sh, -c, 'echo PM_MATRIX_GUEST_OK > /dev/ttyS0; poweroff -f' ]\n")?;
+    let snap_probe = "set +e; exec >/dev/ttyS0 2>&1; echo PM_MATRIX_GUEST_OK; if ! command -v snap >/dev/null 2>&1; then echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=executable-missing; poweroff -f; exit 0; fi; echo SNAP_FIND; snap find hello-world; find_status=$?; echo SNAP_INFO; snap info hello-world; info_status=$?; echo SNAP_LIST_BEFORE; snap list; list_status=$?; echo SNAP_INSTALL; snap install hello-world; install_status=$?; echo SNAP_LIST_AFTER_INSTALL; snap list hello-world; list_after_status=$?; echo SNAP_REMOVE; snap remove hello-world; remove_status=$?; echo SNAP_LIST_AFTER_REMOVE; snap list hello-world; final_list_status=$?; if [ $find_status -eq 0 ] && [ $info_status -eq 0 ] && [ $list_status -eq 0 ] && [ $install_status -eq 0 ] && [ $list_after_status -eq 0 ] && [ $remove_status -eq 0 ] && [ $final_list_status -ne 0 ]; then echo PM_MATRIX_SNAP_OK; else echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=command-failed find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status; fi; poweroff -f";
+    let user_data_contents = format!("#cloud-config\nruncmd:\n  - [ sh, -c, {:?} ]\n", snap_probe);
+    fs::write(&user_data, user_data_contents)?;
     fs::write(
         &meta_data,
         b"instance-id: pm-matrix\nlocal-hostname: pm-matrix\n",
@@ -1037,10 +1039,20 @@ fn vm_run_inner() -> Result<()> {
         .spawn()
         .context("spawn QEMU")?;
     cleanup.child = Some(child);
-    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(120))?;
+    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(300))?;
     cleanup.child = None;
     if !result.stdout.contains("PM_MATRIX_GUEST_OK") {
         bail!("guest probe did not report PM_MATRIX_GUEST_OK");
+    }
+    if !result.stdout.contains("PM_MATRIX_SNAP_OK") {
+        if let Some(line) = result
+            .stdout
+            .lines()
+            .find(|line| line.contains("PM_MATRIX_SNAP_UNAVAILABLE"))
+        {
+            bail!("guest snap lane unavailable: {line}");
+        }
+        bail!("guest snap probe did not report PM_MATRIX_SNAP_OK");
     }
     Ok(())
 }
@@ -1392,7 +1404,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "dnf5" => Some(&[
             "sh",
             "-ec",
-            "dnf5 --version; printf 'LIST\\n'; dnf5 --disable-repo='*' list installed bash; printf 'SEARCH\\n'; dnf5 --disable-repo='*' search bash; printf 'DETAILS\\n'; dnf5 --disable-repo='*' info installed bash; printf 'INSTALL\\n'; dnf5 --disable-repo='*' install -y --assumeno bash; printf 'REMOVE\\n'; dnf5 --disable-repo='*' remove -y --assumeno fedora-release",
+            "dnf5 --version; printf 'LIST\\n'; dnf5 list installed bash; printf 'SEARCH\\n'; dnf5 search hello; printf 'DETAILS\\n'; dnf5 info hello; printf 'INSTALL\\n'; dnf5 install -y hello; rpm -q hello; printf 'REMOVE\\n'; dnf5 remove -y hello; ! rpm -q hello",
         ]),
         "dnf4" => Some(&[
             "sh",
