@@ -1,0 +1,1 @@
+<z:stream xmlns:z="urn:z"><z:solvable type="package" status="installed"><z:name>lib&amp;foo</z:name><z:version>1.0</z:version><z:arch>x86_64</z:arch><z:repository alias="repo-oss"/></z:solvable><z:solvable type="patch"><z:name>p</z:name></z:solvable></z:stream>

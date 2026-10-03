@@ -434,6 +434,7 @@ name = "system-tools-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "quick-xml",
  "serde_json",
 ]
 
