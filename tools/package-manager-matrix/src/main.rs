@@ -217,7 +217,7 @@ fn verify_manifest(image: &Image) -> Result<()> {
         .output()
         .with_context(|| format!("inspect manifest {reference}"))?;
     if !output.status.success() {
-        return verify_cached_image(image, &reference).with_context(|| {
+        return verify_cached_image(image).with_context(|| {
             format!(
                 "manifest inspect failed for {}: {}; cached image verification also failed",
                 reference,
@@ -244,13 +244,14 @@ fn verify_manifest(image: &Image) -> Result<()> {
     Ok(())
 }
 
-fn verify_cached_image(image: &Image, reference: &str) -> Result<()> {
+fn verify_cached_image(image: &Image) -> Result<()> {
+    let digest_reference = cached_image_reference(image);
     let exists = Command::new("podman")
-        .args(["image", "exists", reference])
+        .args(["image", "exists", &digest_reference])
         .status()
-        .with_context(|| format!("check cached image {reference}"))?;
+        .with_context(|| format!("check cached image {digest_reference}"))?;
     if !exists.success() {
-        return validate_cached_image_available(reference, false);
+        return validate_cached_image_available(&digest_reference, false);
     }
     let inspected = Command::new("podman")
         .args([
@@ -258,19 +259,23 @@ fn verify_cached_image(image: &Image, reference: &str) -> Result<()> {
             "inspect",
             "--format",
             "{{.Digest}} {{.Architecture}}",
-            reference,
+            &digest_reference,
         ])
         .output()
-        .with_context(|| format!("inspect cached image {reference}"))?;
+        .with_context(|| format!("inspect cached image {digest_reference}"))?;
     if !inspected.status.success() {
         bail!(
             "cached image inspect failed for {}: {}",
-            reference,
+            digest_reference,
             String::from_utf8_lossy(&inspected.stderr).trim()
         );
     }
     let inspected_text = String::from_utf8_lossy(&inspected.stdout);
-    validate_cached_image_inspection(image, reference, &inspected_text)
+    validate_cached_image_inspection(image, &digest_reference, &inspected_text)
+}
+
+fn cached_image_reference(image: &Image) -> String {
+    format!("{}@{}", image.registry, image.digest)
 }
 
 fn verify_remote_manifest(image: &Image, reference: &str, body: &str) -> Result<bool> {
@@ -1434,6 +1439,10 @@ mod tests {
     #[test]
     fn cached_image_requires_exact_locked_digest_and_architecture() {
         let image = test_image();
+        assert_eq!(
+            cached_image_reference(&image),
+            "registry.example/test@sha256:locked"
+        );
         assert!(
             validate_cached_image_inspection(
                 &image,
