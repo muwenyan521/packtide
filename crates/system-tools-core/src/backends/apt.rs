@@ -310,7 +310,7 @@ fn elevated_plan<const N: usize>(program: &Path, args: [&str; N]) -> CommandPlan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PackageId, PackageIdentity, WriteOperation};
+    use crate::{PackageId, PackageIdentity, WriteOperation, run_capture_path};
 
     fn identity(name: &str) -> PackageIdentity {
         PackageIdentity::new(
@@ -446,5 +446,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(plan.command.args, ["install", "pkg; touch /tmp/not-run"]);
+    }
+
+    #[test]
+    fn apt_get_exit_100_preserves_lock_error_without_retry_or_success() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "system-tools-core-apt-failure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let script = root.join("apt-get");
+        let count = root.join("invocations");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\nprintf '%s' 'E: Could not get lock /var/lib/dpkg/lock-frontend' >&2\nexit 100\n",
+                count.display()
+            ),
+        )
+        .unwrap();
+        let mut mode = fs::metadata(&script).unwrap().permissions();
+        mode.set_mode(0o755);
+        fs::set_permissions(&script, mode).unwrap();
+
+        let output = run_capture_path(&script, &["install", "bash:amd64"], false);
+        let error = match output {
+            Ok(_) => panic!("apt-get failure was reported as success"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("exited with"));
+        assert!(error.contains("Could not get lock"));
+        assert!(!error.contains("success"));
+        assert_eq!(fs::read_to_string(&count).unwrap().len(), 1);
+        let _ = fs::remove_dir_all(root);
     }
 }
