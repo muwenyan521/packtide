@@ -1,0 +1,4 @@
+Name               Version  Publisher  Notes    Summary
+hello-world        6.4      canonical  -        The classic hello world snap
+classic-app        1.2      acme       classic   A classic confinement fixture
+dev-app            2.0      acme       devmode   A development mode fixture
