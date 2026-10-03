@@ -243,7 +243,7 @@ impl DnfBackend {
                     operation: op,
                     command: self.system_upgrade_plan(),
                     packages: Vec::new(),
-                })
+                });
             }
             _ => return Err(DnfError::UnsupportedOperation),
         };
