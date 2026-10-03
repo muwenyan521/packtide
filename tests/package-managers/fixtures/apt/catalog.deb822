@@ -1,0 +1,10 @@
+Package: libc6:amd64
+Version: 2.36-9
+Architecture: amd64
+Description: GNU C Library
+ multi-line description text
+
+Package: bash
+Version: 5.2.15
+Architecture: amd64
+Description: GNU Bourne Again Shell

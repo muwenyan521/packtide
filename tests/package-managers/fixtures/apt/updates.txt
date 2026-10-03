@@ -1,0 +1,3 @@
+Inst libc6:amd64 [2.36-9] (2.36-9+deb12u4 Debian-Security:stable-security [amd64])
+Inst bash [5.2.15] (5.2.15-2+b2 Debian:stable [amd64])
+Conf libc6:amd64 (2.36-9+deb12u4 Debian-Security:stable-security [amd64])

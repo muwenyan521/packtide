@@ -1,4 +1,6 @@
 mod backend;
+pub mod backends;
+pub mod backends;
 mod cache;
 mod command;
 mod executable;
