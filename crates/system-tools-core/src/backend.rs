@@ -8,17 +8,25 @@ use crate::{CommandPrivilege, TransactionAction};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BackendId {
     Pacman,
+    Apt,
     Paru,
     Yay,
     Flatpak,
 }
 
 impl BackendId {
-    pub const ALL: [Self; 4] = [Self::Pacman, Self::Paru, Self::Yay, Self::Flatpak];
+    pub const ALL: [Self; 5] = [
+        Self::Pacman,
+        Self::Apt,
+        Self::Paru,
+        Self::Yay,
+        Self::Flatpak,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pacman => "pacman",
+            Self::Apt => "apt",
             Self::Paru => "paru",
             Self::Yay => "yay",
             Self::Flatpak => "flatpak",
@@ -430,6 +438,9 @@ pub trait PackageBackend {
                     capability: CapabilitySet::DOWNGRADE,
                 });
             }
+            (BackendId::Apt, WriteOperation::Install { .. })
+            | (BackendId::Apt, WriteOperation::Upgrade { .. }) => "install",
+            (BackendId::Apt, WriteOperation::Remove { .. }) => "remove",
             (_, WriteOperation::Install { .. }) => "-S",
             (_, WriteOperation::Remove { .. }) => "-Rns",
             (_, WriteOperation::Upgrade { .. }) | (_, WriteOperation::SystemUpgrade) => "-Su",
@@ -471,7 +482,7 @@ impl PackageBackend for BuiltinBackend {
 
     fn class(&self) -> BackendClass {
         match self.0 {
-            BackendId::Pacman => BackendClass::Native,
+            BackendId::Pacman | BackendId::Apt => BackendClass::Native,
             BackendId::Paru | BackendId::Yay | BackendId::Flatpak => BackendClass::Optional,
         }
     }
@@ -480,12 +491,12 @@ impl PackageBackend for BuiltinBackend {
         match self.0 {
             BackendId::Flatpak => PackageKind::Flatpak,
             BackendId::Paru | BackendId::Yay => PackageKind::Aur,
-            BackendId::Pacman => PackageKind::System,
+            BackendId::Pacman | BackendId::Apt => PackageKind::System,
         }
     }
 
     fn scope(&self) -> PackageScope {
-        if self.0 == BackendId::Pacman {
+        if matches!(self.0, BackendId::Pacman | BackendId::Apt) {
             PackageScope::System
         } else {
             PackageScope::User
@@ -504,7 +515,7 @@ impl PackageBackend for BuiltinBackend {
             .union(CapabilitySet::UPGRADE);
         match self.0 {
             BackendId::Flatpak => write,
-            BackendId::Pacman | BackendId::Paru | BackendId::Yay => write
+            BackendId::Pacman | BackendId::Apt | BackendId::Paru | BackendId::Yay => write
                 .union(CapabilitySet::DOWNGRADE)
                 .union(CapabilitySet::SYSTEM_UPGRADE),
         }
@@ -513,7 +524,9 @@ impl PackageBackend for BuiltinBackend {
     fn catalog_strategy(&self) -> CatalogStrategy {
         match self.0 {
             BackendId::Flatpak => CatalogStrategy::QueryRequired,
-            BackendId::Pacman | BackendId::Paru | BackendId::Yay => CatalogStrategy::Enumerated,
+            BackendId::Pacman | BackendId::Apt | BackendId::Paru | BackendId::Yay => {
+                CatalogStrategy::Enumerated
+            }
         }
     }
 }

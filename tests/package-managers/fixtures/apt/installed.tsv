@@ -1,0 +1,3 @@
+bash	5.2.15	amd64	install ok installed
+linux-image-amd64	6.1	amd64	hold ok installed
+removed-pkg	1.0	amd64	deinstall ok config-files

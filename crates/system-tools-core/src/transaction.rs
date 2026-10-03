@@ -64,6 +64,11 @@ pub fn package_upgrade_command_for(backend: crate::BackendId) -> PackageUpgradeC
             args: &["-Su"],
             privilege: PackageUpgradePrivilege::Elevated,
         },
+        crate::BackendId::Apt => PackageUpgradeCommand {
+            program: "apt-get",
+            args: &["full-upgrade"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
         crate::BackendId::Paru => PackageUpgradeCommand {
             program: "paru",
             args: &["-Su", "--skipreview"],
