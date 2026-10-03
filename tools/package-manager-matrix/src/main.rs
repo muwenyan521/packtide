@@ -9,6 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LOCK: &str = "tests/package-managers/images.lock";
 const DEFAULT_VM_LOCK: &str = "tests/package-managers/ubuntu-cloud-image.lock";
+const BREW_IMAGE: &str = "docker.io/homebrew/brew@sha256:b0072bfdebf5934ae24b93b44a1928a88057399b3283ffa0177bb86084fdedfd";
+const NIX_IMAGE: &str =
+    "docker.io/nixos/nix@sha256:7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
@@ -28,6 +31,16 @@ fn install_signal_handlers() {}
 
 fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
+}
+
+fn seed_builder() -> Option<&'static str> {
+    if command_version("cloud-localds").is_some() {
+        Some("cloud-localds")
+    } else if command_version("xorriso").is_some() {
+        Some("xorriso")
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +122,27 @@ fn main() -> Result<()> {
                 evidence.as_deref(),
             )
         }
+        "probe-nix" => {
+            let mut evidence = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--evidence" => {
+                        evidence = Some(PathBuf::from(
+                            args.next().context("--evidence needs a value")?,
+                        ))
+                    }
+                    value => bail!("unknown probe-nix argument: {value}"),
+                }
+            }
+            let probe = probe_nix_image(NIX_IMAGE);
+            let json = render_probe(&probe);
+            write_evidence(evidence.as_deref(), &format!("{json}\n"))?;
+            println!("{json}");
+            if probe.status != 0 {
+                bail!("Nix lane failed with status {}", probe.status);
+            }
+            Ok(())
+        }
         "verify-cloud-image" => verify_cloud_image_lock(),
         "audit-cleanup" => audit_cleanup(),
         "vm-run" => vm_run(),
@@ -127,7 +161,7 @@ fn main() -> Result<()> {
             probe_all(evidence.as_deref())
         }
         _ => bail!(
-            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|all|vm-run|vm-interrupt-test> [options]"
+            "usage: package-manager-matrix <doctor|list-images|probe-alpine|single|probe-nix|all|vm-run|vm-interrupt-test> [options]"
         ),
     }
 }
@@ -137,6 +171,7 @@ fn doctor() -> Result<()> {
     let qemu = command_version("qemu-system-x86_64");
     let kvm = Path::new("/dev/kvm").exists();
     let cloud_localds = command_version("cloud-localds");
+    let xorriso = command_version("xorriso");
     let mut missing = Vec::new();
     if podman.is_none() {
         missing.push("podman");
@@ -147,17 +182,19 @@ fn doctor() -> Result<()> {
     if !kvm {
         missing.push("/dev/kvm");
     }
-    if cloud_localds.is_none() {
-        missing.push("cloud-localds");
+    if seed_builder().is_none() {
+        missing.push("cloud-localds or xorriso");
     }
     let status = if missing.is_empty() { "pass" } else { "fail" };
     println!(
-        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_localds\":{},\"cloud_localds_required\":true,\"missing\":{}}}",
+        "{{\"status\":{},\"podman\":{},\"qemu\":{},\"kvm\":{},\"cloud_localds\":{},\"xorriso\":{},\"seed_builder\":{},\"missing\":{}}}",
         json_string(status),
         json_string(podman.as_deref().unwrap_or("MISSING")),
         json_string(qemu.as_deref().unwrap_or("MISSING")),
         kvm,
         json_string(cloud_localds.as_deref().unwrap_or("MISSING")),
+        json_string(xorriso.as_deref().unwrap_or("MISSING")),
+        json_string(seed_builder().unwrap_or("MISSING")),
         json_array(&missing)
     );
     if !missing.is_empty() {
@@ -377,18 +414,14 @@ fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
     }
 
     records.push(vm_lane_probe());
-    records.push(unavailable_probe(
+    records.push(probe_optional_image(
         "brew",
-        "optional",
-        None,
-        "Linuxbrew lane has no locked executable image or runner",
+        BREW_IMAGE,
+        [
+            "sh", "-ec", "brew --version; printf 'LIST\\n'; brew search --formula hello; printf 'DETAILS\\n'; brew info --json=v2 hello; printf 'INSTALL\\n'; brew install hello; printf 'REMOVE\\n'; brew uninstall hello",
+        ],
     ));
-    records.push(unavailable_probe(
-        "nix",
-        "optional",
-        None,
-        "Nix profile lane has no locked executable image or runner",
-    ));
+    records.push(probe_nix_image(NIX_IMAGE));
 
     let mut report = String::new();
     let mut failed = Vec::new();
@@ -401,7 +434,7 @@ fn probe_all(evidence_path: Option<&Path>) -> Result<()> {
         report.push_str(&json);
         report.push('\n');
     }
-    let aggregate_status = if failed.is_empty() { 0 } else { 1 };
+    let aggregate_status = aggregate_status(&records);
     let aggregate = format!(
         "{{\"scenario\":\"matrix\",\"status\":{},\"lane_status\":{},\"lanes\":{},\"failed_lanes\":{}}}",
         aggregate_status,
@@ -495,6 +528,261 @@ fn probe_image(
     }
 }
 
+fn probe_optional_image(lane: &str, image: &str, args: [&str; 3]) -> ProbeOutput {
+    let name = format!("pm-matrix-{}-{}", std::process::id(), unix_nanos());
+    let mut command = Command::new("podman");
+    command
+        .args(["run", "--rm", "--name", &name, "--network", "bridge"])
+        .arg(image)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let cleanup_guard = CleanupGuard::new(&name);
+    let started = Instant::now();
+    let result = run_bounded(command, COMMAND_TIMEOUT);
+    drop(cleanup_guard);
+    let cleanup = cleanup_check(&name);
+    let (status, stdout, stderr, error) = match result {
+        Ok(output) => (
+            output.status.code().unwrap_or(1),
+            output.stdout,
+            output.stderr,
+            None,
+        ),
+        Err(err) => (1, String::new(), String::new(), Some(err.to_string())),
+    };
+    ProbeOutput {
+        lane: lane.into(),
+        kind: "optional",
+        status,
+        lane_status: if status == 0 { "pass" } else { "fail" },
+        image: Some(image.into()),
+        manifest_digest: image.split('@').nth(1).map(str::to_owned),
+        architecture: Some("amd64".into()),
+        package_manager: Some(lane.into()),
+        package_manager_version: stdout
+            .lines()
+            .find(|line| !line.is_empty())
+            .map(str::to_owned),
+        elapsed_ms: started.elapsed().as_millis(),
+        stdout: stdout.trim().into(),
+        stderr: stderr.trim().into(),
+        error,
+        cleanup,
+    }
+}
+
+const NIX_STORE_URL: &str = "local?state=/tmp/pm-matrix-nix/state&log=/tmp/pm-matrix-nix/log";
+
+fn probe_nix_image(image: &str) -> ProbeOutput {
+    let lane = "nix";
+    let started = Instant::now();
+    let name = format!("pm-matrix-{}-{}", std::process::id(), unix_nanos());
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .unwrap_or(1000);
+    let gid = std::process::Command::new("id")
+        .arg("-g")
+        .output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .unwrap_or(uid);
+    let user = format!("{uid}:{gid}");
+    let cleanup_guard = CleanupGuard::new(&name);
+    let run = (|| -> Result<(String, String)> {
+        let output = Command::new("podman")
+            .args([
+                "run",
+                "--detach",
+                "--rm",
+                "--user",
+                &user,
+                "--cap-add",
+                "CAP_DAC_OVERRIDE",
+                "--network",
+                "bridge",
+                "--name",
+                &name,
+                "--env",
+                "HOME=/tmp/pm-matrix-nix/home",
+                "--env",
+                "NIX_STATE_DIR=/tmp/pm-matrix-nix/state",
+                "--env",
+                "NIX_LOG_DIR=/tmp/pm-matrix-nix/log",
+                image,
+                "sh",
+                "-ec",
+                "mkdir -p /tmp/pm-matrix-nix/state /tmp/pm-matrix-nix/log /tmp/pm-matrix-nix/home; sleep 600",
+            ])
+            .output()
+            .context("start non-root Nix container")?;
+        if !output.status.success() {
+            bail!(
+                "podman run exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let exec = |script: &str| -> Result<String> {
+            let output = Command::new("podman")
+                .args(["exec", "--user", &user, &name, "sh", "-ec", script])
+                .output()
+                .with_context(|| format!("run Nix command: {script}"))?;
+            if !output.status.success() {
+                bail!(
+                    "Nix command failed ({}): {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let flags =
+            format!("--extra-experimental-features 'nix-command flakes' --store '{NIX_STORE_URL}'");
+        let version = exec("nix --version")?;
+        let identity = exec(
+            "printf 'uid=%s\\ngid=%s\\nsudo=%s\\n' \"$(id -u)\" \"$(id -g)\" \"$(command -v sudo || true)\"",
+        )?;
+        if !identity
+            .lines()
+            .any(|line| line == format!("uid={uid}").as_str())
+            || !identity
+                .lines()
+                .any(|line| line == format!("gid={gid}").as_str())
+            || !identity.lines().any(|line| line == "sudo=")
+        {
+            bail!("Nix lane identity is not the current user without sudo: {identity:?}");
+        }
+        let before = exec(&format!("nix {flags} profile list --json"))?;
+        let search = exec(&format!(
+            "nix {flags} search --json nixpkgs#hello '^hello$'"
+        ))?;
+        let search_json: serde_json::Value =
+            serde_json::from_str(search.trim()).context("parse nix search JSON")?;
+        if !search_json
+            .as_object()
+            .is_some_and(|packages| packages.keys().any(|key| key.ends_with(".hello")))
+        {
+            bail!("nix search JSON did not contain hello");
+        }
+        exec(&format!("nix {flags} profile install nixpkgs#hello"))?;
+        let after = exec(&format!("nix {flags} profile list --json"))?;
+        let selector = nix_profile_element_selector(&after)?;
+        exec(&format!(
+            "nix {flags} profile remove {}",
+            shell_quote(&selector)
+        ))?;
+        let removed = exec(&format!("nix {flags} profile list --json"))?;
+        let removed_json: serde_json::Value =
+            serde_json::from_str(removed.trim()).context("parse removed Nix profile JSON")?;
+        if !removed_json
+            .get("elements")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
+        {
+            bail!("Nix profile still has elements after removing {selector}");
+        }
+        Ok((
+            format!(
+                "uid/gid/sudo:\n{identity}NIX_VERSION:\n{version}LIST_BEFORE:\n{}SEARCH:\n{}PROFILE_AFTER_INSTALL:\n{}SELECTOR:{selector}\nPROFILE_AFTER_REMOVE:\n{}",
+                before.trim(),
+                search.trim(),
+                after.trim(),
+                removed.trim()
+            ),
+            version.trim().to_owned(),
+        ))
+    })();
+    drop(cleanup_guard);
+    let cleanup = cleanup_check(&name);
+    match run {
+        Ok((stdout, version)) => ProbeOutput {
+            lane: lane.into(),
+            kind: "optional",
+            status: 0,
+            lane_status: "pass",
+            image: Some(image.into()),
+            manifest_digest: image.split('@').nth(1).map(str::to_owned),
+            architecture: Some("amd64".into()),
+            package_manager: Some(lane.into()),
+            package_manager_version: Some(version),
+            elapsed_ms: started.elapsed().as_millis(),
+            stdout,
+            stderr: String::new(),
+            error: None,
+            cleanup,
+        },
+        Err(error) => ProbeOutput {
+            lane: lane.into(),
+            kind: "optional",
+            status: 1,
+            lane_status: "fail",
+            image: Some(image.into()),
+            manifest_digest: image.split('@').nth(1).map(str::to_owned),
+            architecture: Some("amd64".into()),
+            package_manager: Some(lane.into()),
+            package_manager_version: None,
+            elapsed_ms: started.elapsed().as_millis(),
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some(error.to_string()),
+            cleanup,
+        },
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn nix_profile_element_selector(json: &str) -> Result<String> {
+    let document: serde_json::Value =
+        serde_json::from_str(json).context("parse nix profile JSON")?;
+    let elements = document
+        .get("elements")
+        .and_then(serde_json::Value::as_object)
+        .context("Nix profile JSON missing object 'elements'")?;
+    if elements.is_empty() {
+        bail!("Nix profile has no active element");
+    }
+    elements
+        .iter()
+        .find_map(|(selector, element)| {
+            let active = element
+                .get("active")
+                .and_then(serde_json::Value::as_bool)
+                .is_some_and(|active| active);
+            let hello = element
+                .get("originalUrl")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|url| url.contains("hello"))
+                || element
+                    .get("attrPath")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|path| path.ends_with(".hello"));
+            if active && hello && !selector.is_empty() && selector.parse::<usize>().is_err() {
+                Some(selector.clone())
+            } else {
+                None
+            }
+        })
+        .context("Nix profile JSON has no stable active hello element selector")
+}
+
 fn failed_probe(
     lane: &str,
     kind: &'static str,
@@ -546,52 +834,52 @@ fn unavailable_probe(
 fn vm_lane_probe() -> ProbeOutput {
     match read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK)) {
         Ok(image) => {
-            let mut missing = Vec::new();
-            if command_version("qemu-system-x86_64").is_none() {
-                missing.push("qemu-system-x86_64");
+            let started = Instant::now();
+            match vm_run_inner() {
+                Ok(()) => ProbeOutput {
+                    lane: "snap-vm".into(),
+                    kind: "vm",
+                    status: 0,
+                    lane_status: "pass",
+                    image: Some(image.url),
+                    manifest_digest: None,
+                    architecture: Some(image.arch),
+                    package_manager: None,
+                    package_manager_version: None,
+                    elapsed_ms: started.elapsed().as_millis(),
+                    stdout: "PM_MATRIX_GUEST_OK".into(),
+                    stderr: String::new(),
+                    error: None,
+                    cleanup: true,
+                },
+                Err(error) => failed_probe("snap-vm", "vm", Some(image.url), error.to_string()),
             }
-            if !Path::new("/dev/kvm").exists() {
-                missing.push("/dev/kvm");
-            }
-            if command_version("cloud-localds").is_none() {
-                missing.push("cloud-localds");
-            }
-            let checksum = if missing.is_empty() {
-                verify_cloud_image(&image).err().map(|e| e.to_string())
-            } else {
-                None
-            };
-            let reason = if let Some(error) = checksum {
-                format!("Snap VM cloud image validation failed: {error}")
-            } else if missing.is_empty() {
-                format!(
-                    "Snap VM orchestration is not implemented; locked cloud image {} is metadata-only",
-                    image.url
-                )
-            } else {
-                format!(
-                    "Snap VM lane unavailable: missing {} (locked image {} sha256:{})",
-                    missing.join(", "),
-                    image.url,
-                    image.sha256
-                )
-            };
-            unavailable_probe("snap-vm", "vm", Some(image.url), reason)
         }
         Err(error) => failed_probe("snap-vm", "vm", None, error.to_string()),
+    }
+}
+
+fn aggregate_status(records: &[ProbeOutput]) -> i32 {
+    if records.iter().all(|record| record.status == 0) {
+        0
+    } else {
+        1
     }
 }
 
 fn verify_cloud_image(image: &CloudImage) -> Result<()> {
     let path = std::env::temp_dir().join(format!("pm-matrix-cloud-{}.img", unix_nanos()));
     let result = download_cloud_image(image, &path);
-    let cleanup = fs::remove_file(&path);
-    if let Err(error) = cleanup
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        return Err(error).context("remove cloud image temp file");
-    }
+    remove_cloud_temp(&path)?;
     result
+}
+
+fn remove_cloud_temp(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("remove cloud image temp file"),
+    }
 }
 
 fn download_cloud_image(image: &CloudImage, path: &Path) -> Result<()> {
@@ -660,11 +948,20 @@ fn verify_cloud_image_lock() -> Result<()> {
 }
 
 fn vm_run() -> Result<()> {
+    vm_run_inner()
+}
+
+fn vm_run_inner() -> Result<()> {
     let image = read_cloud_image_lock(Path::new(DEFAULT_VM_LOCK))?;
-    let missing = ["qemu-system-x86_64", "qemu-img", "cloud-localds"]
+    let missing = ["qemu-system-x86_64", "qemu-img"]
         .into_iter()
         .filter(|tool| command_version(tool).is_none())
         .collect::<Vec<_>>();
+    if seed_builder().is_none() {
+        let mut missing = missing;
+        missing.push("cloud-localds or xorriso");
+        return vm_unavailable(&image, &missing);
+    }
     if !Path::new("/dev/kvm").exists() {
         let mut missing = missing;
         missing.push("/dev/kvm");
@@ -679,8 +976,11 @@ fn vm_run() -> Result<()> {
     let base = work.join("ubuntu.img");
     download_cloud_image(&image, &base)?;
     let overlay = work.join("overlay.qcow2");
+    let backing_format = qemu_image_format(&base)?;
     let status = Command::new("qemu-img")
-        .args(["create", "-f", "qcow2", "-F", "raw", "-b"])
+        .args(["create", "-f", "qcow2", "-F"])
+        .arg(&backing_format)
+        .arg("-b")
         .arg(&base)
         .arg(&overlay)
         .status()
@@ -691,17 +991,106 @@ fn vm_run() -> Result<()> {
     let user_data = work.join("user-data");
     let meta_data = work.join("meta-data");
     let seed = work.join("seed.iso");
-    fs::write(&user_data, b"#cloud-config\nruncmd:\n  - [ sh, -c, 'echo PM_MATRIX_GUEST_OK > /dev/ttyS0; poweroff -f' ]\n")?;
+    let snap_probe = r#"#!/bin/sh
+set +e
+exec >/dev/ttyS0 2>&1
+echo PM_MATRIX_GUEST_OK
+
+command -v snap >/dev/null 2>&1
+command_status=$?
+if [ "$command_status" -ne 0 ]; then
+    echo "PM_MATRIX_SNAP_COMMAND name=command-v status=$command_status"
+    echo PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=executable-missing
+    poweroff -f
+    exit 0
+fi
+
+run_snap_step() {
+    name=$1
+    shift
+    echo "SNAP_$name"
+    "$@" &
+    pid=$!
+    elapsed=0
+    while kill -0 "$pid" >/dev/null 2>&1 && [ "$elapsed" -lt 30 ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        kill "$pid" >/dev/null 2>&1
+        sleep 2
+        kill -KILL "$pid" >/dev/null 2>&1
+        wait "$pid"
+        status=124
+    else
+        wait "$pid"
+        status=$?
+    fi
+    echo "PM_MATRIX_SNAP_COMMAND name=$name status=$status"
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+        timeout_step=$name
+    fi
+    return $status
+}
+
+timeout_step=
+run_snap_step FIND snap find hello-world
+find_status=$?
+run_snap_step INFO snap info hello-world
+info_status=$?
+run_snap_step LIST_BEFORE snap list
+list_status=$?
+run_snap_step INSTALL snap install hello-world
+install_status=$?
+run_snap_step LIST_AFTER_INSTALL snap list hello-world
+list_after_status=$?
+run_snap_step REMOVE snap remove hello-world
+remove_status=$?
+run_snap_step LIST_AFTER_REMOVE snap list hello-world
+final_list_status=$?
+
+echo "PM_MATRIX_SNAP_RESULT find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+if [ "$find_status" -eq 0 ] && [ "$info_status" -eq 0 ] && [ "$list_status" -eq 0 ] && [ "$install_status" -eq 0 ] && [ "$list_after_status" -eq 0 ] && [ "$remove_status" -eq 0 ] && [ "$final_list_status" -ne 0 ]; then
+    echo PM_MATRIX_SNAP_OK
+else
+    if [ -n "$timeout_step" ]; then
+        echo "PM_MATRIX_SNAP_UNAVAILABLE command=$timeout_step reason=timeout find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+    else
+        echo "PM_MATRIX_SNAP_UNAVAILABLE command=snap reason=command-failed find=$find_status info=$info_status list=$list_status install=$install_status list_after=$list_after_status remove=$remove_status final_list=$final_list_status"
+    fi
+fi
+poweroff -f
+"#;
+    let indented_probe = snap_probe
+        .lines()
+        .map(|line| format!("      {line}\n"))
+        .collect::<String>();
+    let user_data_contents = format!(
+        "#cloud-config\nwrite_files:\n  - path: /var/lib/pm-matrix-snap-probe.sh\n    permissions: '0755'\n    content: |\n{indented_probe}runcmd:\n  - [ sh, /var/lib/pm-matrix-snap-probe.sh ]\n"
+    );
+    fs::write(&user_data, user_data_contents)?;
     fs::write(
         &meta_data,
         b"instance-id: pm-matrix\nlocal-hostname: pm-matrix\n",
     )?;
-    let status = Command::new("cloud-localds")
-        .arg(&seed)
-        .arg(&user_data)
-        .arg(&meta_data)
-        .status()
-        .context("create cloud-init seed")?;
+    let seed_tool = seed_builder().context("no cloud-init seed builder")?;
+    let status = if seed_tool == "cloud-localds" {
+        Command::new(seed_tool)
+            .arg(&seed)
+            .arg(&user_data)
+            .arg(&meta_data)
+            .status()
+    } else {
+        Command::new(seed_tool)
+            .args([
+                "-as", "mkisofs", "-volid", "cidata", "-joliet", "-rock", "-o",
+            ])
+            .arg(&seed)
+            .arg(&user_data)
+            .arg(&meta_data)
+            .status()
+    }
+    .context("create cloud-init seed")?;
     if !status.success() {
         bail!("cloud-localds exited with {status}");
     }
@@ -725,12 +1114,58 @@ fn vm_run() -> Result<()> {
         .spawn()
         .context("spawn QEMU")?;
     cleanup.child = Some(child);
-    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(30))?;
+    let result = run_child_timeout(cleanup.child.as_mut().unwrap(), Duration::from_secs(300))?;
     cleanup.child = None;
+    let guest_serial = guest_serial_summary(&result.stdout);
     if !result.stdout.contains("PM_MATRIX_GUEST_OK") {
-        bail!("guest probe did not report PM_MATRIX_GUEST_OK");
+        bail!("guest probe did not report PM_MATRIX_GUEST_OK (guest serial: {guest_serial})");
+    }
+    if !result.stdout.contains("PM_MATRIX_SNAP_OK") {
+        if let Some(line) = result
+            .stdout
+            .lines()
+            .find(|line| line.contains("PM_MATRIX_SNAP_UNAVAILABLE"))
+        {
+            bail!("guest snap lane unavailable: {line} (guest serial: {guest_serial})");
+        }
+        bail!("guest snap probe did not report PM_MATRIX_SNAP_OK (guest serial: {guest_serial})");
     }
     Ok(())
+}
+
+fn guest_serial_summary(serial: &str) -> String {
+    let summary = serial
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            (line.contains("PM_MATRIX_") || line.starts_with("SNAP_")).then_some(line)
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if summary.is_empty() {
+        "empty".into()
+    } else {
+        summary
+    }
+}
+
+fn qemu_image_format(path: &Path) -> Result<String> {
+    let output = Command::new("qemu-img")
+        .args(["info", "--output=json"])
+        .arg(path)
+        .output()
+        .context("inspect cloud image format")?;
+    if !output.status.success() {
+        bail!("qemu-img info exited with {}", output.status);
+    }
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse qemu-img format metadata")?;
+    let format = info
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .filter(|format| !format.is_empty())
+        .context("qemu-img metadata has no format")?;
+    Ok(format.to_string())
 }
 
 fn vm_unavailable(image: &CloudImage, missing: &[&str]) -> Result<()> {
@@ -790,14 +1225,44 @@ fn run_child_timeout(child: &mut Child, timeout: Duration) -> Result<Output> {
         }
         if interrupted() {
             terminate(child);
+            let _output = child_output(child)?;
             bail!("child interrupted");
         }
         if start.elapsed() >= timeout {
             terminate(child);
-            bail!("VM exceeded {}ms timeout", timeout.as_millis());
+            let output = child_output(child)?;
+            let serial = output.stdout.trim();
+            if serial.is_empty() {
+                bail!(
+                    "VM exceeded {}ms timeout (guest serial empty)",
+                    timeout.as_millis()
+                );
+            }
+            bail!(
+                "VM exceeded {}ms timeout (guest serial: {})",
+                timeout.as_millis(),
+                serial
+            );
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn child_output(child: &mut Child) -> Result<Output> {
+    let status = child.wait().context("wait for terminated child")?;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_string(&mut stdout)?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_string(&mut stderr)?;
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 struct VmCleanup {
@@ -1031,12 +1496,12 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "dnf5" => Some(&[
             "sh",
             "-ec",
-            "set -eu; dnf5 --version; printf 'LIST\\n'; dnf5 list --available bash; printf 'DETAILS\\n'; dnf5 info bash; printf 'BEFORE\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello unexpectedly preinstalled' >&2; exit 1; fi; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; rpm -q hello; printf 'REMOVE\\n'; dnf5 remove -y hello; printf 'AFTER\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello remained installed after remove' >&2; exit 1; fi",
+            "set -eu; dnf5 --version; printf 'LIST\\n'; dnf5 list installed bash; printf 'SEARCH\\n'; dnf5 search hello; printf 'DETAILS\\n'; dnf5 info hello; printf 'BEFORE\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello unexpectedly preinstalled' >&2; exit 1; fi; printf 'INSTALL\\n'; dnf5 install -y --setopt=install_weak_deps=False hello; rpm -q hello; printf 'REMOVE\\n'; dnf5 remove -y hello; printf 'AFTER\\n'; if rpm -q hello >/dev/null 2>&1; then echo 'hello remained installed after remove' >&2; exit 1; fi",
         ]),
         "dnf4" => Some(&[
             "sh",
             "-ec",
-            "dnf --version; printf 'LIST\\n'; dnf list --available bash; printf 'DETAILS\\n'; dnf info bash; printf 'INSTALL\\n'; dnf install -y --setopt=install_weak_deps=False hello; printf 'REMOVE\\n'; dnf remove -y hello",
+            "dnf --version; printf 'LIST\\n'; dnf list installed bash; printf 'DETAILS\\n'; dnf info bash; printf 'INSTALL\\n'; dnf install -y --setopt=install_weak_deps=False tree; printf 'REMOVE\\n'; dnf remove -y tree",
         ]),
         "zypper" => Some(&[
             "sh",
@@ -1046,7 +1511,7 @@ fn probe_command(manager: &str) -> Option<&'static [&'static str]> {
         "xbps" => Some(&[
             "sh",
             "-ec",
-            "xbps-query --version; printf 'LIST\\n'; xbps-query -Rs '^bash$'; printf 'DETAILS\\n'; xbps-query -S bash; printf 'INSTALL\\n'; xbps-install -Sy hello; printf 'REMOVE\\n'; xbps-remove -Ry hello",
+            "xbps-query --version; xbps-install -i -S -R https://repo-default.voidlinux.org/current/musl; xbps-install -i -y -R https://repo-default.voidlinux.org/current/musl -u xbps; printf 'LIST\\n'; xbps-query -l; printf 'DETAILS\\n'; xbps-query -S xbps; printf 'INSTALL\\n'; xbps-install -i -y -R https://repo-default.voidlinux.org/current/musl curl; printf 'REMOVE\\n'; xbps-remove -Ry curl",
         ]),
         _ => None,
     }
@@ -1249,7 +1714,28 @@ mod tests {
     #[test]
     fn digest_validation_rejects_bad_values() {
         assert!(validate_digest("sha256:bad").is_err());
+        assert!(validate_digest(&format!("sha256:{}", "g".repeat(64))).is_err());
         assert!(validate_digest(&format!("sha256:{}", "a".repeat(64))).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_guest_exit_is_reported_as_failure() {
+        let mut child = Command::new("sh").args(["-c", "exit 23"]).spawn().unwrap();
+        let error = match run_child_timeout(&mut child, Duration::from_secs(2)) {
+            Ok(_) => panic!("nonzero guest exit was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("exit status: 23"));
+    }
+
+    #[test]
+    fn cleanup_error_is_returned_with_context() {
+        let directory = std::env::temp_dir().join(format!("pm-matrix-cleanup-{}", unix_nanos()));
+        fs::create_dir(&directory).unwrap();
+        let error = remove_cloud_temp(&directory).unwrap_err();
+        assert!(error.to_string().contains("remove cloud image temp file"));
+        fs::remove_dir(&directory).unwrap();
     }
     #[test]
     fn lock_has_required_alpine_fields() {
@@ -1286,7 +1772,7 @@ mod tests {
     }
 
     #[test]
-    fn fedora_probe_performs_real_transaction_and_rpm_state_checks() {
+    fn fedora_probe_performs_real_transaction_and_checks_rpm_state() {
         let command = probe_command("dnf5").expect("Fedora lane is supported");
         let script = command
             .iter()
@@ -1295,6 +1781,7 @@ mod tests {
         assert!(script.contains("dnf5 install -y"));
         assert!(!script.contains("--assumeno"));
         assert!(script.contains("rpm -q hello"));
+        assert!(script.contains("BEFORE"));
         assert!(script.contains("AFTER"));
     }
     #[test]
@@ -1316,6 +1803,50 @@ mod tests {
         assert_eq!(probe.status, 1);
         assert!(rendered.contains("\"lane_status\":\"unavailable\""));
         assert!(rendered.contains("\"status\":1"));
+    }
+
+    #[test]
+    fn aggregate_dispatch_requires_every_lane_to_pass() {
+        let passing = ProbeOutput {
+            lane: "snap-vm".into(),
+            kind: "vm",
+            status: 0,
+            lane_status: "pass",
+            image: None,
+            manifest_digest: None,
+            architecture: None,
+            package_manager: None,
+            package_manager_version: None,
+            elapsed_ms: 1,
+            stdout: "PM_MATRIX_GUEST_OK".into(),
+            stderr: String::new(),
+            error: None,
+            cleanup: true,
+        };
+        let mut unavailable = unavailable_probe("snap-vm", "vm", None, "missing qemu");
+        assert_eq!(aggregate_status(&[passing]), 0);
+        unavailable.status = 0;
+        assert_eq!(aggregate_status(&[unavailable]), 0);
+        let failing = failed_probe("fedora", "container", None, "dnf5 failed".into());
+        assert_eq!(aggregate_status(&[failing]), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_timeout_is_a_failure_not_a_pass() {
+        let output = run_bounded(
+            {
+                let mut command = Command::new("sh");
+                command.args(["-c", "sleep 5"]);
+                command
+            },
+            Duration::from_millis(50),
+        );
+        let error = match output {
+            Ok(_) => panic!("timed out command was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("exceeded 0s timeout"));
     }
     #[test]
     fn manifest_architecture_is_bound_to_the_locked_digest() {
@@ -1341,5 +1872,38 @@ mod tests {
             parse_manager_version("apk", "apk-tools 2.14.4, compiled for x86_64.\n").unwrap();
         assert!(validate_manager_version("apk", "2.14.4-r0", Some(&observed)).is_err());
         assert!(validate_manager_version("apk", "2.14.4", Some(&observed)).is_ok());
+    }
+
+    #[test]
+    fn nix_profile_selector_uses_stable_element_id() {
+        let json = r#"{"version":3,"elements":{"nixpkgs#hello":{"active":true,"originalUrl":"nixpkgs#hello","storePaths":["/tmp/nix/store/hello"]}}}"#;
+        assert_eq!(nix_profile_element_selector(json).unwrap(), "nixpkgs#hello");
+    }
+
+    #[test]
+    fn nix_profile_selector_rejects_missing_or_index_only_schema() {
+        assert!(nix_profile_element_selector(r#"{"version":3}"#).is_err());
+        assert!(
+            nix_profile_element_selector(
+                r#"{"version":3,"elements":{"0":{"active":true,"originalUrl":"nixpkgs#hello"}}}"#
+            )
+            .is_err()
+        );
+        assert!(nix_profile_element_selector(
+            r#"{"version":3,"elements":{"nixpkgs#hello":{"active":false,"originalUrl":"nixpkgs#hello"}}}"#
+        )
+        .is_err());
+        assert!(
+            nix_profile_element_selector(
+                r#"{"version":3,"elements":{"nixpkgs#hello":{"originalUrl":"nixpkgs#hello"}}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn nix_profile_selector_reports_invalid_json() {
+        let error = nix_profile_element_selector("not-json").unwrap_err();
+        assert!(error.to_string().contains("parse nix profile JSON"));
     }
 }
