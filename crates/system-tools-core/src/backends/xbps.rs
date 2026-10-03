@@ -115,7 +115,7 @@ pub fn parse_installed(input: &str) -> Result<Vec<XbpsPackage>, XbpsError> {
     input
         .lines()
         .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty())
+        .filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
         .map(|(i, l)| parse_record(i + 1, l, true))
         .collect()
 }
@@ -304,5 +304,21 @@ mod tests {
         assert_eq!(t.command.program, std::path::Path::new("/xbps-install"));
         assert_eq!(t.command.args, ["-y", "foo;touch /tmp/x"]);
         assert_eq!(t.command.privilege, CommandPrivilege::Elevated);
+    }
+
+    #[test]
+    fn parses_installed_and_updates_fixtures_and_prints_plans() {
+        let installed =
+            parse_installed("# xbps-query header\n\nlib-foo-1.2_3\trepo\tx86_64\n").unwrap();
+        assert_eq!(installed.len(), 1);
+        assert!(installed[0].installed);
+        let updates = parse_updates(include_str!(
+            "../../../../tests/package-managers/fixtures/xbps/updates.tsv"
+        ))
+        .unwrap();
+        assert_eq!(updates[0].name, "lib-foo");
+        assert_eq!(updates[0].current.as_deref(), Some("1.2"));
+        assert_eq!(updates[0].candidate, "1.3");
+        println!("installed={installed:?} updates={updates:?}");
     }
 }
