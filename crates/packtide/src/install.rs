@@ -16,6 +16,12 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         "the package installation picker",
         false,
     )?;
+    let pacman = crate::app::require_command_for(
+        "pacman",
+        "capability.catalog",
+        "the package catalog lookup",
+        false,
+    )?;
     let native = crate::app::native_backend()?;
     if native != system_tools_core::BackendId::Pacman {
         anyhow::bail!(
@@ -23,12 +29,6 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
             native.as_str()
         );
     }
-    let pacman = crate::app::require_command_for(
-        "pacman",
-        "capability.catalog",
-        "the package catalog lookup",
-        false,
-    )?;
     let helper = crate::app::package_helper_for("package installation")?;
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(

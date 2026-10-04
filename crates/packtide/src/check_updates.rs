@@ -48,6 +48,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
     };
     let updates = repo_aur
         .into_iter()
+        .chain(query_native_updates())
         .chain(query_flatpak_updates())
         .collect::<Vec<_>>();
     let updates = deduplicate_updates(updates);
@@ -274,6 +275,40 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         debug_source_timing("aur_updates", started);
     }
     Some(updates)
+}
+
+fn query_native_updates() -> Vec<PackageUpdate> {
+    let backend = crate::app::native_backend().ok();
+    let Some(backend) = backend else {
+        return Vec::new();
+    };
+    let registry = BackendRegistry::default();
+    let Some(provider) = registry.backend(backend) else {
+        return Vec::new();
+    };
+    provider
+        .read(ReadOperation::Updates)
+        .ok()
+        .map(|result| {
+            result
+                .packages
+                .into_iter()
+                .map(|package| PackageUpdate {
+                    source: match backend {
+                        BackendId::Apt => PackageSource::Apt,
+                        BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
+                        BackendId::Zypper => PackageSource::Zypper,
+                        BackendId::Apk => PackageSource::Apk,
+                        BackendId::Xbps => PackageSource::Xbps,
+                        _ => PackageSource::Pacman,
+                    },
+                    name: package.native_key.as_str().to_owned(),
+                    version: None,
+                    display: package.native_key.as_str().to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn query_flatpak_updates() -> Vec<PackageUpdate> {

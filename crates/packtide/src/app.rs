@@ -39,8 +39,17 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
 }
 
 pub(crate) fn native_backend() -> Result<BackendId> {
-    let native = detect_native_backend_from_file("/etc/os-release")
-        .map_err(|error| anyhow::anyhow!("cannot detect native package backend: {error}"))?;
+    if ExecutableResolver::from_path(env::var_os("PATH").as_deref())
+        .resolve(OsStr::new("pacman"))
+        .is_none()
+    {
+        anyhow::bail!(
+            "required command 'pacman' is unavailable for capability.install; install it and retry"
+        );
+    }
+    let native = detect_native_backend_from_file("/etc/os-release").map_err(|error| {
+        anyhow::anyhow!("cannot detect native package backend for capability.install: {error}")
+    })?;
     Ok(match native {
         NativeBackend::Pacman => BackendId::Pacman,
         NativeBackend::Apt => BackendId::Apt,
