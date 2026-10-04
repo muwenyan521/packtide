@@ -6,6 +6,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::ExecutableResolver;
+use system_tools_core::{BackendId, NativeBackend, detect_native_backend_from_file};
 
 use crate::cli::{Cli, CommandLine, CompatibilityRoute, compatibility_route};
 use crate::commands::sysup;
@@ -35,6 +36,19 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
             crate::locale::text(lang, capability_key, &[]),
         )
     }
+}
+
+pub(crate) fn native_backend() -> Result<BackendId> {
+    let native = detect_native_backend_from_file("/etc/os-release")
+        .map_err(|error| anyhow::anyhow!("cannot detect native package backend: {error}"))?;
+    Ok(match native {
+        NativeBackend::Pacman => BackendId::Pacman,
+        NativeBackend::Apt => BackendId::Apt,
+        NativeBackend::Dnf => BackendId::Dnf5,
+        NativeBackend::Zypper => BackendId::Zypper,
+        NativeBackend::Apk => BackendId::Apk,
+        NativeBackend::Xbps => BackendId::Xbps,
+    })
 }
 
 pub(crate) fn require_command_for(

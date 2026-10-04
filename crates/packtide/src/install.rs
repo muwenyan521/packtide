@@ -16,6 +16,13 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         "the package installation picker",
         false,
     )?;
+    let native = crate::app::native_backend()?;
+    if native != system_tools_core::BackendId::Pacman {
+        anyhow::bail!(
+            "packtide install picker currently supports Pacman/AUR on Arch; detected native backend {}",
+            native.as_str()
+        );
+    }
     let pacman = crate::app::require_command_for(
         "pacman",
         "capability.catalog",
