@@ -6,6 +6,7 @@ use std::process::ExitStatus;
 use crate::ExecutableResolver;
 use crate::backends::apt::AptBackend;
 use crate::backends::dnf::{DnfBackend, DnfGeneration};
+use crate::backends::{apk::ApkBackend, xbps::XbpsBackend, zypper::ZypperBackend};
 use crate::plan::CommandPlan;
 use crate::{CommandPrivilege, TransactionAction};
 
@@ -629,6 +630,9 @@ pub trait PackageBackend {
                 | BackendId::Snap
                 | BackendId::Brew
                 | BackendId::Nix
+                | BackendId::Zypper
+                | BackendId::Apk
+                | BackendId::Xbps
         ) {
             if let Some(package) = operation.packages().iter().find(|package| {
                 package.backend != self.id()
@@ -679,6 +683,24 @@ pub trait PackageBackend {
                 BackendId::Nix => crate::backends::nix::NixBackend::from_paths(program)
                     .transaction(operation.clone())
                     .map_err(|error| error.to_string()),
+                BackendId::Zypper => ZypperBackend::from_paths(program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
+                BackendId::Apk => ApkBackend::from_paths(program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
+                BackendId::Xbps => {
+                    let remove = resolver.resolve(OsStr::new("xbps-remove")).ok_or_else(|| {
+                        BackendError::CommandUnavailable {
+                            backend: self.id(),
+                            operation: "write transaction",
+                            command: "xbps-remove".to_owned(),
+                        }
+                    })?;
+                    XbpsBackend::from_paths(&program, &program, remove)
+                        .transaction(operation.clone())
+                        .map_err(|error| error.to_string())
+                }
                 _ => unreachable!(),
             };
             return result.map(|plan| plan.command).map_err(|message| {
@@ -862,7 +884,9 @@ impl PackageBackend for BuiltinBackend {
                 .union(CapabilitySet::SYSTEM_UPGRADE),
             BackendId::Apt => write.union(CapabilitySet::SYSTEM_UPGRADE),
             BackendId::Dnf5 | BackendId::Dnf4 => write.union(CapabilitySet::SYSTEM_UPGRADE),
-            _ => CapabilitySet::empty(),
+            BackendId::Zypper | BackendId::Apk | BackendId::Xbps => {
+                write.union(CapabilitySet::SYSTEM_UPGRADE)
+            }
         }
     }
 
@@ -908,15 +932,9 @@ impl PackageBackend for BuiltinBackend {
             BackendId::Snap => read_snap(operation.clone())?,
             BackendId::Brew => read_brew(operation.clone())?,
             BackendId::Nix => read_nix(operation.clone())?,
-            _ => {
-                return Ok(ReadResult {
-                    backend: self.id(),
-                    operation,
-                    packages: Vec::new(),
-                    source: self.catalog_strategy(),
-                    details: None,
-                });
-            }
+            BackendId::Zypper => read_zypper(operation.clone())?,
+            BackendId::Apk => read_apk(operation.clone())?,
+            BackendId::Xbps => read_xbps(operation.clone())?,
         };
         Ok(ReadResult {
             backend: self.id(),
@@ -1544,6 +1562,131 @@ fn read_nix(
         success: true,
     });
     Ok((packages, CatalogStrategy::DirectQuery, details))
+}
+
+fn read_zypper(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let backend = BackendId::Zypper;
+    let provider = ZypperBackend::from_path(std::env::var_os("PATH").as_deref())
+        .map_err(|e| optional_read_error(backend, e))?;
+    let (plan, details) = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
+        ReadOperation::Search { query } => (provider.search_plan(query), false),
+        ReadOperation::Installed => (provider.installed_plan(), false),
+        ReadOperation::Updates => (provider.updates_plan(), false),
+        ReadOperation::Details { package, .. } => (
+            provider
+                .details_plan(package)
+                .map_err(|e| optional_read_error(backend, e))?,
+            true,
+        ),
+    };
+    let output = execute_plan(&plan, backend, "read packages")?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let records = match operation {
+        ReadOperation::Updates => crate::backends::zypper::parse_updates_xml(&output.stdout)
+            .map_err(|e| optional_read_error(backend, e))?
+            .into_iter()
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect(),
+        _ => crate::backends::zypper::parse_search_xml(&output.stdout)
+            .map_err(|e| optional_read_error(backend, e))?
+            .into_iter()
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect(),
+    };
+    let detail = details.then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((records, CatalogStrategy::Enumerated, detail))
+}
+
+fn read_apk(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let backend = BackendId::Apk;
+    let provider = ApkBackend::from_path(std::env::var_os("PATH").as_deref())
+        .map_err(|e| optional_read_error(backend, e))?;
+    let (plan, details) = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
+        ReadOperation::Search { query } => (provider.search_plan(query), false),
+        ReadOperation::Installed => (provider.installed_plan(), false),
+        ReadOperation::Updates => (provider.updates_plan(), false),
+        ReadOperation::Details { package, .. } => (
+            provider
+                .details_plan(package)
+                .map_err(|e| optional_read_error(backend, e))?,
+            true,
+        ),
+    };
+    let output = execute_plan(&plan, backend, "read packages")?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let packages = match operation {
+        ReadOperation::Installed => crate::backends::apk::parse_installed(&output.stdout),
+        _ => crate::backends::apk::parse_search(&output.stdout),
+    }
+    .map_err(|e| optional_read_error(backend, e))?
+    .into_iter()
+    .filter_map(|p| identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok())
+    .collect();
+    let detail = details.then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((packages, CatalogStrategy::Enumerated, detail))
+}
+
+fn read_xbps(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let backend = BackendId::Xbps;
+    let provider = XbpsBackend::from_path(std::env::var_os("PATH").as_deref())
+        .map_err(|e| optional_read_error(backend, e))?;
+    let (plan, details) = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
+        ReadOperation::Search { query } => (provider.search_plan(query), false),
+        ReadOperation::Installed => (provider.installed_plan(), false),
+        ReadOperation::Updates => (provider.updates_plan(), false),
+        ReadOperation::Details { package, .. } => (
+            provider
+                .details_plan(package)
+                .map_err(|e| optional_read_error(backend, e))?,
+            true,
+        ),
+    };
+    let output = execute_plan(&plan, backend, "read packages")?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let packages = match operation {
+        ReadOperation::Installed => crate::backends::xbps::parse_installed(&output.stdout),
+        _ => crate::backends::xbps::parse_search(&output.stdout),
+    }
+    .map_err(|e| optional_read_error(backend, e))?
+    .into_iter()
+    .filter_map(|p| identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok())
+    .collect();
+    let detail = details.then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((packages, CatalogStrategy::Enumerated, detail))
 }
 
 fn read_flatpak(
@@ -2195,23 +2338,18 @@ mod tests {
     }
 
     #[test]
-    fn command_for_rejects_unimplemented_backends_before_identity_or_argv() {
-        let unsupported = [BackendId::Zypper, BackendId::Apk, BackendId::Xbps];
-        let foreign_identity = BuiltinBackend::new(BackendId::Pacman)
-            .identity(NativePackageKey::new("same-name").unwrap());
-
-        for backend in unsupported {
+    fn command_for_rejects_identity_tampering_before_provider_argv() {
+        for backend in [BackendId::Zypper, BackendId::Apk, BackendId::Xbps] {
+            let foreign_identity = BuiltinBackend::new(BackendId::Pacman)
+                .identity(NativePackageKey::new("same-name").unwrap());
             let provider = BuiltinBackend::new(backend);
             let operation = WriteOperation::Install {
                 packages: vec![foreign_identity.clone()],
             };
-            assert_eq!(
+            assert!(matches!(
                 provider.command_for(&operation),
-                Err(BackendError::UnsupportedCapability {
-                    backend,
-                    capability: CapabilitySet::INSTALL,
-                })
-            );
+                Err(BackendError::IdentityMismatch { .. })
+            ));
         }
     }
 
