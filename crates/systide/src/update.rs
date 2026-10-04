@@ -2,8 +2,8 @@ use crate::messages::{Lang, log_info, log_success, log_warn, msg};
 use anyhow::{Result, anyhow};
 use std::ffi::OsStr;
 use system_tools_core::{
-    BackendId, ExecutableResolver, PackageUpgradePrivilege, package_upgrade_command,
-    run_package_keyring_update_with_resolver, run_package_upgrade, run_status_path_timeout,
+    BackendId, CommandPlan, ExecutableResolver, PackageUpgradePrivilege, package_upgrade_command,
+    run_command_plan, run_package_keyring_update_with_resolver, run_package_upgrade_with_resolver,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,25 +52,57 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
     let update_plan = plan(backend, |optional| {
         resolver.resolve(OsStr::new(optional.as_str())).is_some()
     });
-    run_native(update_plan.native, lang, &resolver)?;
+    let outcome = execute_plan(
+        &update_plan,
+        || run_native(update_plan.native, lang, &resolver),
+        |backend| {
+            log_info(lang, &format!("optional update: {}", backend.as_str()));
+            run_optional(backend, &resolver).map_err(|error| {
+                log_warn(lang, &format!("{}: {error}", backend.as_str()));
+                error
+            })
+        },
+    )?;
+    for (backend, state) in &outcome.optional {
+        if *state == StepResult::Failed {
+            log_warn(
+                lang,
+                &format!("{}: {}", backend.as_str(), msg(lang, "backend.partial")),
+            );
+        }
+    }
+    if outcome.exit_code() != 0 {
+        return Err(anyhow!("native package update failed"));
+    }
+    if outcome
+        .optional
+        .iter()
+        .all(|(_, state)| *state == StepResult::Success)
+    {
+        log_success(lang, msg(lang, "update_complete"));
+    }
+    Ok(())
+}
+
+fn execute_plan(
+    plan: &UpdatePlan,
+    native: impl FnOnce() -> Result<()>,
+    mut run_optional: impl FnMut(BackendId) -> Result<()>,
+) -> Result<UpdateOutcome> {
+    native()?;
     let mut optional = Vec::new();
-    for backend in update_plan.optional {
-        log_info(lang, &format!("optional update: {}", backend.as_str()));
+    for &backend in &plan.optional {
         let state = if run_optional(backend).is_ok() {
             StepResult::Success
         } else {
-            log_warn(lang, msg(lang, "backend.partial"));
             StepResult::Failed
         };
         optional.push((backend, state));
     }
-    let outcome = UpdateOutcome {
+    Ok(UpdateOutcome {
         native: StepResult::Success,
         optional,
-    };
-    let _ = outcome.exit_code();
-    log_success(lang, msg(lang, "update_complete"));
-    Ok(())
+    })
 }
 
 fn run_native(backend: BackendId, lang: Lang, resolver: &ExecutableResolver) -> Result<()> {
@@ -91,24 +123,28 @@ fn run_native(backend: BackendId, lang: Lang, resolver: &ExecutableResolver) -> 
         PackageUpgradePrivilege::User => "user",
     };
     print_summary("upgrade", command.program, privilege, command.args, lang);
-    run_package_upgrade(backend)
+    run_package_upgrade_with_resolver(backend, resolver)
         .map(|_| ())
         .map_err(|error| anyhow!(error.to_string()))
 }
 
-fn run_optional(backend: BackendId) -> Result<()> {
-    let path = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref())
-        .resolve(OsStr::new(backend.as_str()))
-        .ok_or_else(|| anyhow!("{} unavailable", backend.as_str()))?;
-    let args: &[&str] = match backend {
-        BackendId::Flatpak => &["update", "-y"],
-        BackendId::Snap => &["refresh"],
-        BackendId::Brew => &["upgrade"],
-        BackendId::Nix => &["profile", "upgrade", ".*"],
-        _ => return Ok(()),
-    };
-    run_status_path_timeout(&path, args, std::time::Duration::from_secs(180))?;
-    Ok(())
+fn run_optional(backend: BackendId, resolver: &ExecutableResolver) -> Result<()> {
+    let command = package_upgrade_command(backend)?;
+    let program = resolver
+        .resolve(OsStr::new(command.program))
+        .ok_or_else(|| anyhow!("{} unavailable", command.program))?;
+    let mut plan = CommandPlan::new(program)
+        .with_backend(backend)
+        .with_env_remove("LD_PRELOAD")
+        .with_env_remove("LD_LIBRARY_PATH")
+        .with_locale("C")
+        .with_privilege(command.privilege);
+    plan.args
+        .extend(command.args.iter().map(|arg| (*arg).into()));
+    if backend == BackendId::Flatpak {
+        plan.args.push("-y".into());
+    }
+    run_command_plan(&plan).map(|_| ())
 }
 
 fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str], lang: Lang) {
@@ -156,6 +192,125 @@ mod tests {
             optional: Vec::new(),
         };
         assert_eq!(outcome.exit_code(), 1);
+    }
+    fn command_fixture(native_status: i32) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "systide-update-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).expect("create command fixture");
+        for (program, status) in [
+            ("brew", native_status),
+            ("paru", native_status),
+            ("flatpak", 7),
+            ("snap", 0),
+        ] {
+            let file = path.join(program);
+            std::fs::write(
+                &file,
+                format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}.argv'\nexit {status}\n",
+                    file.display()
+                ),
+            )
+            .expect("write command");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod command");
+        }
+        path
+    }
+    #[test]
+    fn native_command_failure_short_circuits_optional_commands() {
+        let path = command_fixture(9);
+        let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
+        let plan = UpdatePlan {
+            native: BackendId::Brew,
+            optional: vec![BackendId::Flatpak, BackendId::Snap],
+        };
+        let error = execute_plan(
+            &plan,
+            || run_native(plan.native, Lang::En, &resolver),
+            |backend| run_optional(backend, &resolver),
+        )
+        .expect_err("native command failed");
+        assert!(error.to_string().contains("9"));
+        assert!(path.join("brew.argv").exists());
+        assert!(!path.join("flatpak.argv").exists());
+        assert!(!path.join("snap.argv").exists());
+        println!("native exit=9; flatpak invoked=false; snap invoked=false");
+        std::fs::remove_dir_all(path).expect("remove command fixture");
+    }
+    #[test]
+    fn optional_command_failure_is_recorded_and_later_command_runs() {
+        let path = command_fixture(0);
+        let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
+        let plan = UpdatePlan {
+            native: BackendId::Brew,
+            optional: vec![BackendId::Flatpak, BackendId::Snap],
+        };
+        let outcome = execute_plan(
+            &plan,
+            || run_native(plan.native, Lang::En, &resolver),
+            |backend| run_optional(backend, &resolver),
+        )
+        .expect("optional failure is nonfatal");
+        assert_eq!(
+            outcome.optional,
+            vec![
+                (BackendId::Flatpak, StepResult::Failed),
+                (BackendId::Snap, StepResult::Success)
+            ]
+        );
+        assert_eq!(outcome.exit_code(), 0);
+        println!(
+            "optional outcome={:?}; exit={}",
+            outcome.optional,
+            outcome.exit_code()
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("flatpak.argv")).expect("flatpak command ran"),
+            "update -y\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("snap.argv")).expect("later snap command ran"),
+            "refresh\n"
+        );
+        std::fs::remove_dir_all(path).expect("remove command fixture");
+    }
+    #[test]
+    fn run_consumes_partial_outcome_without_claiming_full_success() {
+        const CHILD: &str = "SYSTIDE_PARTIAL_UPDATE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            run(BackendId::Paru, Lang::En).expect("partial optional update succeeds");
+            return;
+        }
+        let path = command_fixture(0);
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "update::tests::run_consumes_partial_outcome_without_claiming_full_success",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", &path)
+            .output()
+            .expect("run update subprocess");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout.contains("flatpak:"));
+        assert!(stdout.contains(msg(Lang::En, "backend.partial")));
+        assert!(!stdout.contains(msg(Lang::En, "update_complete")));
+        assert_eq!(
+            std::fs::read_to_string(path.join("snap.argv")).expect("later optional ran"),
+            "refresh\n"
+        );
+        println!("{stdout}");
+        std::fs::remove_dir_all(path).expect("remove command fixture");
     }
     #[test]
     fn renders_upgrade_summary_with_helper_privilege() {

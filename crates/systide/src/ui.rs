@@ -6,8 +6,9 @@ use std::io::Write;
 use std::process::{Command, ExitStatus};
 use std::time::Instant;
 use system_tools_core::{
-    BackendId, BuiltinBackend, CapabilitySet, ExecutableResolver, NativeBackend, PackageBackend,
-    current_executable, detect_native_backend_from_file, require_command_for, run_capture_path,
+    BackendId, BackendRegistry, BuiltinBackend, CapabilitySet, ExecutableResolver, NativeBackend,
+    PackageBackend, ReadOperation, current_executable, detect_native_backend_from_file,
+    require_command_for, run_capture_path,
 };
 
 const COMMON_FZF_LAYOUT_ARGS: &[&str] = &[
@@ -50,6 +51,30 @@ fn collect_update_rows_with_resolver(
 ) -> Result<String> {
     let mut rows = String::new();
     let mut seen = HashSet::new();
+    if let Some(native) = native.filter(|backend| *backend != NativeBackend::Pacman) {
+        let backend = match native {
+            NativeBackend::Pacman => BackendId::Pacman,
+            NativeBackend::Apt => BackendId::Apt,
+            NativeBackend::Dnf => BackendId::Dnf5,
+            NativeBackend::Zypper => BackendId::Zypper,
+            NativeBackend::Apk => BackendId::Apk,
+            NativeBackend::Xbps => BackendId::Xbps,
+        };
+        let registry = BackendRegistry::default();
+        let provider = registry
+            .backend(backend)
+            .context("native update backend missing")?;
+        let updates = provider.read(ReadOperation::Updates)?;
+        for package in updates.packages {
+            append_source_rows(
+                &mut rows,
+                &mut seen,
+                backend.as_str(),
+                "34",
+                package.native_key.as_str(),
+            );
+        }
+    }
     let arch_updates = native.is_some_and(|backend| {
         matches!(backend, NativeBackend::Pacman)
             && BuiltinBackend::new(BackendId::Pacman)
@@ -250,12 +275,22 @@ mod tests {
             ("checkupdates", "printf 'repo 1 -> 2\\n'"),
             ("paru", "printf 'aur 1 -> 2\\n'"),
             ("flatpak", "printf 'org.example.App 2\\n'"),
+            (
+                "apt-get",
+                "printf 'Inst native-package [1] (2 stable [amd64])\\n'",
+            ),
+            ("apt-cache", "exit 0"),
+            ("dpkg-query", "exit 0"),
         ] {
             let file = path.join(name);
             let marker = marker_dir.join(name);
             fs::write(
                 &file,
-                format!("#!/bin/sh\ntouch '{}'\n{}\n", marker.display(), body),
+                format!(
+                    "#!/bin/sh\n/usr/bin/touch '{}'\n{}\n",
+                    marker.display(),
+                    body
+                ),
             )
             .expect("write fixture command");
             let mut permissions = fs::metadata(&file)
@@ -282,14 +317,45 @@ mod tests {
 
     #[test]
     fn non_arch_native_list_skips_arch_only_providers() {
+        if std::env::var_os("SYSTIDE_NATIVE_LIST_FIXTURE").is_some() {
+            let path = PathBuf::from(
+                std::env::var_os("SYSTIDE_NATIVE_LIST_FIXTURE").expect("fixture path"),
+            );
+            let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
+            let rows = collect_update_rows_with_resolver(
+                super::Lang::En,
+                Some(NativeBackend::Apt),
+                &resolver,
+            )
+            .expect("collect non-Arch rows");
+            assert!(rows.contains("[apt]"));
+            assert!(rows.contains("\tnative-package\tnative-package"));
+            assert!(!rows.contains("[Pacman]"));
+            assert!(!rows.contains("[AUR]"));
+            assert!(rows.contains("[Flatpak]"));
+            println!("{rows}");
+            return;
+        }
         let (path, markers) = fixture();
-        let resolver = ExecutableResolver::from_path(Some(path.as_os_str()));
-        let rows =
-            collect_update_rows_with_resolver(super::Lang::En, Some(NativeBackend::Apt), &resolver)
-                .expect("collect non-Arch rows");
-        assert!(!rows.contains("[Pacman]"));
-        assert!(!rows.contains("[AUR]"));
-        assert!(rows.contains("[Flatpak]"));
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "ui::tests::non_arch_native_list_skips_arch_only_providers",
+                "--nocapture",
+            ])
+            .env("SYSTIDE_NATIVE_LIST_FIXTURE", &path)
+            .env("PATH", &path)
+            .output()
+            .expect("run native provider subprocess");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("native-package"));
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(markers.join("apt-get").exists());
         assert!(!markers.join("checkupdates").exists());
         assert!(!markers.join("paru").exists());
         assert!(markers.join("flatpak").exists());

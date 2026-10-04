@@ -1291,6 +1291,15 @@ fn read_dnf_with_resolver(
         ),
     };
     let out = execute_plan(&plan, backend, "read packages")?;
+    if matches!(operation, ReadOperation::Catalog | ReadOperation::Updates)
+        && out
+            .status
+            .code()
+            .map(crate::backends::dnf::parse_check_update_status)
+            == Some(Ok(true))
+    {
+        return Ok((Vec::new(), CatalogStrategy::Enumerated, None));
+    }
     if !out.status.success() && !matches!(operation, ReadOperation::Details { .. }) {
         return Err(command_failed(backend, "read packages", &out));
     }
@@ -2752,6 +2761,54 @@ mod tests {
                 .as_str(),
             "modern-bash"
         );
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn dnf_read_dispatch_treats_exit_100_as_empty_and_preserves_other_failures() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "system-tools-core-dnf-read-status-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create DNF status fixture");
+        let fixture = r#"#!/bin/sh
+case "$1:$2" in
+    list:--json|list:--upgrades|repoquery:--upgrades|repoquery:--qf) exit 100 ;;
+esac
+printf '%s\n' 'dnf read failed' >&2
+exit 2
+"#;
+        for executable in ["dnf", "dnf5"] {
+            let path = directory.join(executable);
+            std::fs::write(&path, fixture).expect("write DNF status fixture");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("make DNF status fixture executable");
+        }
+        let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
+
+        for backend in [BackendId::Dnf4, BackendId::Dnf5] {
+            for operation in [ReadOperation::Catalog, ReadOperation::Updates] {
+                let result = super::read_dnf_with_resolver(operation, backend, &resolver)
+                    .expect("DNF exit 100 means no packages");
+                assert!(result.0.is_empty());
+                assert_eq!(result.1, CatalogStrategy::Enumerated);
+            }
+
+            let error = super::read_dnf_with_resolver(ReadOperation::Installed, backend, &resolver)
+                .expect_err("DNF exit 2 must remain an error");
+            assert_eq!(
+                error,
+                BackendError::CommandFailed {
+                    backend,
+                    operation: "read packages",
+                    message: "dnf read failed".into(),
+                }
+            );
+        }
 
         let _ = std::fs::remove_dir_all(directory);
     }
