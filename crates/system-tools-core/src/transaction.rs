@@ -3,7 +3,7 @@ use std::process::ExitStatus;
 
 use crate::{BackendError, BackendId, CommandPlan, ExecutableResolver, run_command_plan};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CommandPrivilege {
     Elevated,
     User,
@@ -47,7 +47,12 @@ pub fn package_upgrade_command(
             args: &["upgrade", "-y"],
             privilege: PackageUpgradePrivilege::Elevated,
         },
-        BackendId::Dnf5 | BackendId::Dnf4 => PackageUpgradeCommand {
+        BackendId::Dnf5 => PackageUpgradeCommand {
+            program: "dnf5",
+            args: &["upgrade", "-y"],
+            privilege: PackageUpgradePrivilege::Elevated,
+        },
+        BackendId::Dnf4 => PackageUpgradeCommand {
             program: "dnf",
             args: &["upgrade", "-y"],
             privilege: PackageUpgradePrivilege::Elevated,
@@ -70,7 +75,7 @@ pub fn package_upgrade_command(
         BackendId::Snap => PackageUpgradeCommand {
             program: "snap",
             args: &["refresh"],
-            privilege: PackageUpgradePrivilege::User,
+            privilege: PackageUpgradePrivilege::Elevated,
         },
         BackendId::Brew => PackageUpgradeCommand {
             program: "brew",
@@ -213,6 +218,27 @@ mod tests {
         assert_eq!(command.program, "yay");
         assert_eq!(command.args, ["-Su", "--answeredit", "None"]);
         assert_eq!(command.privilege, PackageUpgradePrivilege::User);
+    }
+
+    #[test]
+    fn package_upgrade_command_uses_matching_dnf_generation_executable() {
+        let dnf5 = package_upgrade_command(BackendId::Dnf5).expect("dnf5 is supported");
+        assert_eq!(dnf5.program, "dnf5");
+        assert_eq!(dnf5.args, ["upgrade", "-y"]);
+        assert_eq!(dnf5.privilege, PackageUpgradePrivilege::Elevated);
+
+        let dnf4 = package_upgrade_command(BackendId::Dnf4).expect("dnf4 is supported");
+        assert_eq!(dnf4.program, "dnf");
+        assert_eq!(dnf4.args, ["upgrade", "-y"]);
+        assert_eq!(dnf4.privilege, PackageUpgradePrivilege::Elevated);
+    }
+
+    #[test]
+    fn package_upgrade_command_runs_snap_refresh_elevated() {
+        let command = package_upgrade_command(BackendId::Snap).expect("snap is supported");
+        assert_eq!(command.program, "snap");
+        assert_eq!(command.args, ["refresh"]);
+        assert_eq!(command.privilege, PackageUpgradePrivilege::Elevated);
     }
 
     #[test]
