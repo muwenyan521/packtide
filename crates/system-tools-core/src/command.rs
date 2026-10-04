@@ -51,8 +51,19 @@ pub struct PrivilegeRunner {
     sudo_path: PathBuf,
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_SUDO_PATH: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 impl PrivilegeRunner {
     pub fn system() -> Result<Self> {
+        #[cfg(test)]
+        if let Some(sudo_path) = TEST_SUDO_PATH.with_borrow(Clone::clone) {
+            return Ok(Self { sudo_path });
+        }
         Self::from_search_path(OsStr::new(SUDO_SEARCH_PATH))
     }
 
@@ -94,6 +105,13 @@ impl PrivilegeRunner {
             bail!("sudo exited with {status}");
         }
         Ok(status)
+    }
+
+    fn capture_plan(&self, plan: &crate::CommandPlan) -> Result<Output> {
+        let mut command = Command::new(&self.sudo_path);
+        command.arg(&plan.program).args(&plan.args);
+        scrub_privileged_environment(&mut command);
+        capture_command(command.apply_plan_environment(plan), true)
     }
 }
 
@@ -183,11 +201,18 @@ fn run_capture_os<S>(program: &OsStr, args: &[S], allow_failure: bool) -> Result
 where
     S: AsRef<OsStr>,
 {
+    capture_command(Command::new(program).args(args), allow_failure)
+}
+
+fn capture_command(command: &mut Command, allow_failure: bool) -> Result<Output> {
     let started = Instant::now();
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute {}", program.to_string_lossy()))?;
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to execute {}",
+            command.get_program().to_string_lossy()
+        )
+    })?;
+    let program = command.get_program();
     let result = Output {
         status: output.status,
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -203,6 +228,25 @@ where
         );
     }
     Ok(result)
+}
+
+pub(crate) fn run_capture_plan(plan: &crate::CommandPlan) -> Result<Output> {
+    capture_plan_with_runner(plan, PrivilegeRunner::system)
+}
+
+fn capture_plan_with_runner(
+    plan: &crate::CommandPlan,
+    privilege_runner: impl FnOnce() -> Result<PrivilegeRunner>,
+) -> Result<Output> {
+    match plan.privilege {
+        crate::CommandPrivilege::User => capture_command(
+            Command::new(&plan.program)
+                .args(&plan.args)
+                .apply_plan_environment(plan),
+            true,
+        ),
+        crate::CommandPrivilege::Elevated => privilege_runner()?.capture_plan(plan),
+    }
 }
 
 pub fn run_capture_no_args(program: &str, allow_failure: bool) -> Result<Output> {

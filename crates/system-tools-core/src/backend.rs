@@ -652,7 +652,9 @@ pub trait PackageBackend {
             }
             let executable = match self.id() {
                 BackendId::Apt => "apt-get",
+                BackendId::Dnf5 => "dnf5",
                 BackendId::Dnf4 => "dnf",
+                BackendId::Xbps => "xbps-install",
                 _ => self.id().as_str(),
             };
             let program = resolver.resolve(OsStr::new(executable)).ok_or_else(|| {
@@ -692,6 +694,13 @@ pub trait PackageBackend {
                     .transaction(operation.clone())
                     .map_err(|error| error.to_string()),
                 BackendId::Xbps => {
+                    let query = resolver.resolve(OsStr::new("xbps-query")).ok_or_else(|| {
+                        BackendError::CommandUnavailable {
+                            backend: self.id(),
+                            operation: "write transaction",
+                            command: "xbps-query".to_owned(),
+                        }
+                    })?;
                     let remove = resolver.resolve(OsStr::new("xbps-remove")).ok_or_else(|| {
                         BackendError::CommandUnavailable {
                             backend: self.id(),
@@ -699,7 +708,7 @@ pub trait PackageBackend {
                             command: "xbps-remove".to_owned(),
                         }
                     })?;
-                    XbpsBackend::from_paths(&program, &program, remove)
+                    XbpsBackend::from_paths(query, program, remove)
                         .transaction(operation.clone())
                         .map_err(|error| error.to_string())
                 }
@@ -1128,12 +1137,10 @@ fn execute_plan(
     backend: BackendId,
     operation: &'static str,
 ) -> Result<crate::Output, BackendError> {
-    crate::run_capture_path(&plan.program, &plan.args, true).map_err(|e| {
-        BackendError::CommandFailed {
-            backend,
-            operation,
-            message: e.to_string(),
-        }
+    crate::command::run_capture_plan(plan).map_err(|e| BackendError::CommandFailed {
+        backend,
+        operation,
+        message: e.to_string(),
     })
 }
 
@@ -1237,19 +1244,32 @@ fn read_dnf(
     operation: ReadOperation,
     backend: BackendId,
 ) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    read_dnf_with_resolver(operation, backend, &resolver)
+}
+
+fn read_dnf_with_resolver(
+    operation: ReadOperation,
+    backend: BackendId,
+    resolver: &ExecutableResolver,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     let generation = if backend == BackendId::Dnf5 {
         DnfGeneration::Dnf5
     } else {
         DnfGeneration::Dnf4
     };
-    let b = DnfBackend::detect(std::env::var_os("PATH").as_deref()).map_err(|e| {
+    let executable = match generation {
+        DnfGeneration::Dnf5 => "dnf5",
+        DnfGeneration::Dnf4 => "dnf",
+    };
+    let program = resolver.resolve(OsStr::new(executable)).ok_or_else(|| {
         BackendError::CommandUnavailable {
             backend,
             operation: "read packages",
-            command: e.to_string(),
+            command: executable.to_owned(),
         }
     })?;
-    let b = DnfBackend::from_paths(generation, b.program);
+    let b = DnfBackend::from_paths(generation, program);
     let (plan, parser) = match &operation {
         ReadOperation::RefreshCatalog => {
             return Err(BackendError::UnsupportedCapability {
@@ -2060,6 +2080,26 @@ mod tests {
     };
     use crate::{CommandPrivilege, TransactionAction};
 
+    #[test]
+    fn read_plan_applies_environment_and_preserves_failure_output() {
+        // Given a read plan removing an inherited variable and forcing a locale.
+        assert!(std::env::var_os("HOME").is_some());
+        let plan = crate::CommandPlan::new(std::path::PathBuf::from("/bin/sh"))
+            .arg("-c")
+            .arg("printf '%s\\n' \"${LC_ALL-<unset>}\" \"${HOME-<unset>}\"; printf 'read failure\\n' >&2; exit 7")
+            .with_env_remove("HOME")
+            .with_locale("C");
+
+        // When the backend executes the plan and captures its output.
+        let output = super::execute_plan(&plan, BackendId::Apt, "read packages")
+            .expect("capture unsuccessful read command");
+
+        // Then plan policy and both streams survive the execution boundary.
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, "C\n<unset>\n");
+        assert_eq!(output.stderr, "read failure\n");
+    }
+
     fn ids(values: &[&str]) -> Vec<PackageId> {
         values
             .iter()
@@ -2116,7 +2156,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("create command fixture");
-        for executable in ["zypper", "apk", "xbps", "xbps-remove"] {
+        for executable in ["zypper", "apk", "xbps-query", "xbps-install", "xbps-remove"] {
             let path = directory.join(executable);
             std::fs::write(&path, "fixture").expect("write command fixture");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
@@ -2355,6 +2395,8 @@ mod tests {
     #[test]
     fn native_refresh_catalog_runs_provider_refresh_before_listing() {
         if let Ok(backend) = std::env::var("NATIVE_REFRESH_BACKEND") {
+            let sudo = std::env::var_os("NATIVE_REFRESH_SUDO").expect("fake trusted sudo path");
+            crate::command::TEST_SUDO_PATH.with_borrow_mut(|path| *path = Some(sudo.into()));
             let backend = match backend.as_str() {
                 "zypper" => BackendId::Zypper,
                 "apk" => BackendId::Apk,
@@ -2381,6 +2423,10 @@ mod tests {
         let xbps_install = "#!/bin/sh\nprintf 'install %s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\n[ \"$1\" = -S ]\n";
         let xbps_remove = "#!/bin/sh\nexit 0\n";
         for (name, body) in [
+            (
+                "sudo",
+                "#!/bin/sh\nprintf 'sudo %s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\nexec \"$@\"\n",
+            ),
             ("zypper", zypper.as_str()),
             ("apk", apk),
             ("xbps-query", xbps_query),
@@ -2405,6 +2451,7 @@ mod tests {
                 ])
                 .env("NATIVE_REFRESH_BACKEND", backend)
                 .env("NATIVE_REFRESH_LOG", &log)
+                .env("NATIVE_REFRESH_SUDO", directory.join("sudo"))
                 .env("PATH", &directory)
                 .output()
                 .unwrap();
@@ -2414,6 +2461,16 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             let actual = std::fs::read_to_string(log).unwrap();
+            let (program, argument) = match backend {
+                "zypper" => ("zypper", "refresh"),
+                "apk" => ("apk", "update"),
+                "xbps" => ("xbps-install", "-S"),
+                _ => unreachable!("fixture backend"),
+            };
+            let sudo_invocation = format!("sudo {} {argument}", directory.join(program).display());
+            let expected = std::iter::once(sudo_invocation.as_str())
+                .chain(expected)
+                .collect::<Vec<_>>();
             assert_eq!(actual.lines().collect::<Vec<_>>(), expected);
         }
         let _ = std::fs::remove_dir_all(directory);
@@ -2597,6 +2654,106 @@ mod tests {
                 transaction.command.args
             );
         }
+    }
+
+    #[test]
+    fn xbps_write_dispatch_uses_real_provider_executables() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "system-tools-core-xbps-dispatch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create XBPS resolver fixture");
+        for executable in ["xbps-query", "xbps-install", "xbps-remove"] {
+            let path = directory.join(executable);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write XBPS fixture");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("make XBPS fixture executable");
+        }
+        let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
+        let backend = BuiltinBackend::new(BackendId::Xbps);
+        let identity = backend.identity(NativePackageKey::new("hello").unwrap());
+
+        let install = backend
+            .command_for_with_resolver(
+                &WriteOperation::Install {
+                    packages: vec![identity.clone()],
+                },
+                &resolver,
+            )
+            .expect("resolve xbps-install without a synthetic xbps command");
+        assert_eq!(install.program, directory.join("xbps-install"));
+        assert_eq!(install.args, ["-y", "hello"]);
+
+        let remove = backend
+            .command_for_with_resolver(
+                &WriteOperation::Remove {
+                    packages: vec![identity],
+                },
+                &resolver,
+            )
+            .expect("resolve xbps-remove without a synthetic xbps command");
+        assert_eq!(remove.program, directory.join("xbps-remove"));
+        assert_eq!(remove.args, ["-y", "hello"]);
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn dnf_read_dispatch_uses_requested_generation_with_both_commands_present() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "system-tools-core-dnf-read-dispatch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create DNF resolver fixture");
+        let fixtures = [
+            (
+                "dnf",
+                "#!/bin/sh\nprintf 'legacy-bash\\t0\\t5.2\\t1\\tx86_64\\tfedora\\t1\\n'\n",
+            ),
+            (
+                "dnf5",
+                "#!/bin/sh\nprintf '%s\\n' '[{\"name\":\"modern-bash\",\"version\":\"5.2\",\"arch\":\"x86_64\",\"installed\":true}]'\n",
+            ),
+        ];
+        for (executable, body) in fixtures {
+            let path = directory.join(executable);
+            std::fs::write(&path, body).expect("write DNF fixture");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("make DNF fixture executable");
+        }
+        let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
+
+        let dnf4 =
+            super::read_dnf_with_resolver(ReadOperation::Installed, BackendId::Dnf4, &resolver)
+                .expect("DNF4 read selects dnf when dnf5 is also installed");
+        assert_eq!(
+            dnf4.0
+                .first()
+                .expect("DNF4 fixture package")
+                .native_key
+                .as_str(),
+            "legacy-bash"
+        );
+
+        let dnf5 =
+            super::read_dnf_with_resolver(ReadOperation::Installed, BackendId::Dnf5, &resolver)
+                .expect("DNF5 read selects dnf5 when both generations are installed");
+        assert_eq!(
+            dnf5.0
+                .first()
+                .expect("DNF5 fixture package")
+                .native_key
+                .as_str(),
+            "modern-bash"
+        );
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

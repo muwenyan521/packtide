@@ -1,6 +1,6 @@
 use super::{
-    PRIVILEGED_COMMAND_PATH, PrivilegeRunner, debug_timing_line, debug_timings_enabled,
-    run_command_plan, run_status_path_timeout,
+    PRIVILEGED_COMMAND_PATH, PrivilegeRunner, capture_plan_with_runner, debug_timing_line,
+    debug_timings_enabled, run_command_plan, run_status_path_timeout,
 };
 use crate::{CommandPlan, CommandPrivilege};
 use std::fs;
@@ -263,6 +263,58 @@ fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
         )
     );
     fs::remove_dir_all(fixture).expect("remove command plan fixture");
+}
+
+#[test]
+fn captured_elevated_plan_uses_sudo_and_keeps_environment_argv_and_failure_output() {
+    // Given a fake sudo that records its environment and structured arguments.
+    let fixture = std::env::temp_dir().join(format!(
+        "system-tools-core-capture-plan-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&fixture).expect("create capture fixture");
+    write_executable(
+        &fixture.join("sudo"),
+        "#!/bin/sh\nprintf '%s\\n' \"$PATH\" \"${LC_ALL-<unset>}\" \"${HOME-<unset>}\" \"${PYTHONPATH-<unset>}\" \"$@\"\nprintf 'sudo failure\\n' >&2\nexit 23\n",
+    );
+    let plan = CommandPlan::new(fixture.join("must-not-run-directly"))
+        .arg("argument with spaces")
+        .with_env_remove("HOME")
+        .with_locale("C")
+        .with_privilege(CommandPrivilege::Elevated);
+
+    // When the capture dispatcher executes an elevated plan.
+    let output = capture_plan_with_runner(&plan, || {
+        PrivilegeRunner::from_search_path(fixture.as_os_str())
+    })
+    .expect("capture fake sudo failure");
+
+    // Then sudo is used, the policy is applied, and failure output is retained.
+    assert_eq!(output.status.code(), Some(23));
+    assert_eq!(
+        output.stdout,
+        format!(
+            "{PRIVILEGED_COMMAND_PATH}\nC\n<unset>\n<unset>\n{}\nargument with spaces\n",
+            plan.program.display()
+        )
+    );
+    assert_eq!(output.stderr, "sudo failure\n");
+    fs::remove_dir_all(fixture).expect("remove capture fixture");
+}
+
+#[test]
+fn captured_elevated_plan_does_not_fall_back_when_privilege_runner_is_unavailable() {
+    // Given a command that would succeed if executed without elevation.
+    let plan = CommandPlan::new("/bin/true".into()).with_privilege(CommandPrivilege::Elevated);
+
+    // When trusted sudo cannot be resolved.
+    let result = capture_plan_with_runner(&plan, || anyhow::bail!("trusted sudo unavailable"));
+
+    // Then the resolution error propagates instead of executing directly.
+    assert_eq!(
+        result.err().expect("must fail").to_string(),
+        "trusted sudo unavailable"
+    );
 }
 
 #[test]
