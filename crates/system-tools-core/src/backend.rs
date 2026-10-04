@@ -823,40 +823,11 @@ impl PackageBackend for BuiltinBackend {
     }
 
     fn kind(&self) -> PackageKind {
-        match self.0 {
-            BackendId::Flatpak => PackageKind::Flatpak,
-            BackendId::Snap => PackageKind::Snap,
-            BackendId::Brew => PackageKind::BrewFormula,
-            BackendId::Nix => PackageKind::Nix,
-            BackendId::Paru | BackendId::Yay => PackageKind::Aur,
-            BackendId::Pacman
-            | BackendId::Apt
-            | BackendId::Dnf5
-            | BackendId::Dnf4
-            | BackendId::Zypper
-            | BackendId::Apk
-            | BackendId::Xbps => PackageKind::System,
-        }
+        self.0.default_kind()
     }
 
     fn scope(&self) -> PackageScope {
-        if matches!(
-            self.0,
-            BackendId::Pacman
-                | BackendId::Apt
-                | BackendId::Dnf5
-                | BackendId::Dnf4
-                | BackendId::Zypper
-                | BackendId::Apk
-                | BackendId::Xbps
-                | BackendId::Snap
-        ) {
-            PackageScope::System
-        } else if matches!(self.0, BackendId::Brew | BackendId::Nix) {
-            PackageScope::Profile
-        } else {
-            PackageScope::User
-        }
+        self.0.default_scope()
     }
 
     fn capabilities(&self) -> CapabilitySet {

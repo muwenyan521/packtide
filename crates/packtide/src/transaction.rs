@@ -113,6 +113,36 @@ pub(crate) fn execute_flatpak(packages: &[PackageIdentity]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn execute_native(
+    action: TransactionAction,
+    packages: &[PackageIdentity],
+) -> Result<()> {
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let Some(first) = packages.first() else {
+        return Ok(());
+    };
+    let plan = BackendRegistry::default()
+        .backend(first.backend)
+        .ok_or_else(|| anyhow::anyhow!("backend {} is not registered", first.backend.as_str()))?
+        .write_with_resolver(
+            system_tools_core::WriteOperation::transaction(action, packages.to_vec()),
+            &resolver,
+        )?;
+    let targets = packages
+        .iter()
+        .map(|p| p.native_key.as_str())
+        .collect::<Vec<_>>();
+    print_summary_with_scope(
+        action.as_str(),
+        first.backend.as_str(),
+        "native",
+        &targets,
+        first.scope,
+    );
+    run_command_plan(&plan.command)?;
+    Ok(())
+}
+
 pub(crate) fn print_summary(action: &str, helper: &str, privilege: &str, targets: &[&str]) {
     let scope = if helper == "pacman" {
         PackageScope::System

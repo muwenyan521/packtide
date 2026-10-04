@@ -2,12 +2,13 @@ use anyhow::{Context, Result};
 use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::{
-    BackendId, BackendRegistry, NativePackageKey, PackageBackend, PackageIdentity, PackageKind,
-    PackageScope, PackageSource, ReadOperation, TransactionAction, command_exists,
+    BackendId, BackendRegistry, PackageBackend, PackageIdentity, PackageKind, PackageScope,
+    ReadOperation, TransactionAction, command_exists,
 };
 
 use crate::model::{PackageListing, PackageRecord};
-use crate::transaction::{execute_flatpak, execute_package_typed};
+use crate::transaction::{execute_flatpak, execute_native, execute_package_typed};
+use crate::ui::parse_package_identity;
 use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_rows};
 
 pub(crate) fn run(query: &[String]) -> Result<()> {
@@ -72,46 +73,52 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     let mut package_ids = Vec::new();
     let mut flatpak_user = Vec::new();
     let mut flatpak_system = Vec::new();
+    let mut native_groups: Vec<(BackendId, PackageKind, PackageScope, Vec<PackageIdentity>)> =
+        Vec::new();
     for row in selected.lines() {
-        let Some(package) = parse_package_row(row) else {
+        let Some(_package) = parse_package_row(row) else {
             continue;
         };
-        let (backend, kind) = match package.source {
-            PackageSource::Pacman => (BackendId::Pacman, PackageKind::System),
-            PackageSource::Aur => (
-                if helper == Some("yay") {
+        let Some(mut identity) = parse_package_identity(row) else {
+            anyhow::bail!(
+                "{}: selected row has invalid package identity",
+                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+            );
+        };
+        if matches!(identity.backend, BackendId::Paru | BackendId::Yay)
+            && let Some(helper) = helper
+            && identity.backend
+                != if helper == "yay" {
+                    BackendId::Yay
+                } else {
+                    BackendId::Paru
+                }
+        {
+            identity = identity_with_backend(
+                &identity,
+                if helper == "yay" {
                     BackendId::Yay
                 } else {
                     BackendId::Paru
                 },
-                PackageKind::Aur,
-            ),
-            PackageSource::Flatpak => (BackendId::Flatpak, PackageKind::Flatpak),
-            _ => continue,
-        };
-        let scope = if package.source == PackageSource::Pacman
-            || (package.source == PackageSource::Flatpak
-                && package.repository.as_deref() == Some("flatpak@system"))
-        {
-            PackageScope::System
-        } else {
-            PackageScope::User
-        };
-        let identity =
-            PackageIdentity::new(backend, kind, scope, NativePackageKey::new(package.name)?);
-        if package.source == PackageSource::Flatpak {
-            match scope {
+            );
+        }
+        match identity.backend {
+            BackendId::Flatpak => match identity.scope {
                 PackageScope::System => flatpak_system.push(identity),
                 PackageScope::User | PackageScope::Profile => flatpak_user.push(identity),
-            }
-        } else {
-            package_ids.push(identity);
+            },
+            BackendId::Pacman | BackendId::Paru | BackendId::Yay => package_ids.push(identity),
+            backend => push_native_group(&mut native_groups, backend, identity),
         }
     }
     if !package_ids.is_empty()
         && let Some(helper) = helper
     {
         execute_package_typed(helper, TransactionAction::Remove, &package_ids)?;
+    }
+    for (_, _, _, packages) in native_groups {
+        execute_native(TransactionAction::Remove, &packages)?;
     }
     if command_exists("flatpak") {
         if std::env::var_os("PACKTIDE_DEBUG_REMOVE_ROWS").is_some() {
@@ -133,6 +140,36 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn identity_with_backend(identity: &PackageIdentity, backend: BackendId) -> PackageIdentity {
+    let mut result = PackageIdentity::new(
+        backend,
+        identity.kind,
+        identity.scope,
+        identity.native_key.clone(),
+    );
+    if let Some(origin) = &identity.origin {
+        result = result.with_origin(origin.clone());
+    }
+    if let Some(display_name) = &identity.display_name {
+        result = result.with_display_name(display_name.clone());
+    }
+    result
+}
+
+fn push_native_group(
+    groups: &mut Vec<(BackendId, PackageKind, PackageScope, Vec<PackageIdentity>)>,
+    backend: BackendId,
+    identity: PackageIdentity,
+) {
+    if let Some((_, _, _, packages)) = groups.iter_mut().find(|(id, kind, scope, _)| {
+        *id == backend && *kind == identity.kind && *scope == identity.scope
+    }) {
+        packages.push(identity);
+    } else {
+        groups.push((backend, identity.kind, identity.scope, vec![identity]));
+    }
+}
+
 fn rows(
     pacman: Option<&std::path::Path>,
     helper: Option<&str>,
@@ -150,18 +187,11 @@ fn rows(
             .packages
             .into_iter()
             .map(|package| {
-                let source = match native {
-                    BackendId::Apt => PackageSource::Apt,
-                    BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
-                    BackendId::Zypper => PackageSource::Zypper,
-                    BackendId::Apk => PackageSource::Apk,
-                    BackendId::Xbps => PackageSource::Xbps,
-                    _ => PackageSource::Pacman,
-                };
-                PackageRecord::legacy(
-                    source,
+                let name = package.native_key.as_str().to_owned();
+                PackageRecord::from_identity(
+                    package,
                     None,
-                    package.native_key.as_str().to_owned(),
+                    name,
                     PackageListing::Version(String::new()),
                     true,
                 )
@@ -196,20 +226,22 @@ fn rows(
         .into_iter()
         .filter(|package| !foreign_names.contains(package.native_key.as_str()))
         .map(|package| {
-            PackageRecord::legacy(
-                PackageSource::Pacman,
+            let name = package.native_key.as_str().to_owned();
+            PackageRecord::from_identity(
+                package,
                 None,
-                package.native_key.as_str().to_owned(),
+                name,
                 PackageListing::Version(String::new()),
                 true,
             )
         })
         .collect::<Vec<_>>();
     records.extend(foreign_installed.into_iter().map(|package| {
-        PackageRecord::legacy(
-            PackageSource::Aur,
+        let name = package.native_key.as_str().to_owned();
+        PackageRecord::from_identity(
+            package,
             Some("aur".to_owned()),
-            package.native_key.as_str().to_owned(),
+            name,
             PackageListing::Version(String::new()),
             true,
         )
@@ -222,18 +254,14 @@ fn rows(
             .map_err(|error| anyhow::anyhow!("Flatpak typed installed read failed: {error}"))?
             .packages;
         records.extend(typed_flatpak.into_iter().map(|package| {
-            PackageRecord::legacy(
-                PackageSource::Flatpak,
-                (package.scope == PackageScope::System).then(|| "flatpak@system".to_owned()),
-                package.native_key.as_str().to_owned(),
-                PackageListing::Flatpak {
-                    app_name: package
-                        .display_name
-                        .unwrap_or_else(|| package.native_key.as_str().to_owned()),
-                    origin: package.origin.unwrap_or_default(),
-                },
-                true,
-            )
+            let name = package.native_key.as_str().to_owned();
+            let repository =
+                (package.scope == PackageScope::System).then(|| "flatpak@system".to_owned());
+            let listing = PackageListing::Flatpak {
+                app_name: package.display_name.clone().unwrap_or_else(|| name.clone()),
+                origin: package.origin.clone().unwrap_or_default(),
+            };
+            PackageRecord::from_identity(package, repository, name, listing, true)
         }));
     }
     let _ = pacman;

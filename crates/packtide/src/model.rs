@@ -1,5 +1,7 @@
 pub(crate) use system_tools_core::PackageSource as UpdateSource;
-use system_tools_core::{BackendId, NativePackageKey, PackageScope, PackageSource};
+use system_tools_core::{
+    BackendId, NativePackageKey, PackageIdentity, PackageKind, PackageScope, PackageSource,
+};
 
 #[derive(Debug)]
 pub(crate) struct PackageUpdate {
@@ -12,8 +14,11 @@ pub(crate) struct PackageUpdate {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct PackageRecord {
     pub(crate) backend: BackendId,
+    pub(crate) kind: PackageKind,
     pub(crate) scope: PackageScope,
     pub(crate) native_key: NativePackageKey,
+    pub(crate) origin: Option<String>,
+    pub(crate) display_name: Option<String>,
     pub(crate) source: PackageSource,
     pub(crate) repository: Option<String>,
     pub(crate) name: String,
@@ -29,38 +34,52 @@ impl PackageRecord {
         listing: PackageListing,
         installed: bool,
     ) -> Self {
-        let backend = match source {
-            PackageSource::Aur => BackendId::Paru,
-            PackageSource::Flatpak => BackendId::Flatpak,
-            PackageSource::Apt => BackendId::Apt,
-            PackageSource::Dnf => BackendId::Dnf5,
-            PackageSource::Zypper => BackendId::Zypper,
-            PackageSource::Apk => BackendId::Apk,
-            PackageSource::Xbps => BackendId::Xbps,
-            PackageSource::Snap => BackendId::Snap,
-            PackageSource::Brew => BackendId::Brew,
-            PackageSource::Nix => BackendId::Nix,
-            PackageSource::Pacman => BackendId::Pacman,
-        };
+        let backend = source.backend_for_source();
         let scope = if source == PackageSource::Flatpak
             && repository.as_deref() == Some("flatpak@system")
         {
             PackageScope::System
         } else {
-            match backend {
-                BackendId::Brew | BackendId::Nix => PackageScope::Profile,
-                BackendId::Paru | BackendId::Yay | BackendId::Flatpak | BackendId::Snap => {
-                    PackageScope::User
-                }
-                _ => PackageScope::System,
-            }
+            source.default_scope()
         };
         let native_key = NativePackageKey::new(name.clone()).expect("legacy package name");
+        let (origin, display_name) = match &listing {
+            PackageListing::Flatpak { app_name, origin } => (
+                (!origin.is_empty()).then(|| origin.clone()),
+                (!app_name.is_empty()).then(|| app_name.clone()),
+            ),
+            PackageListing::Version(_) => (None, None),
+        };
         Self {
             backend,
+            kind: backend.default_kind(),
             scope,
             native_key,
+            origin,
+            display_name,
             source,
+            repository,
+            name,
+            listing,
+            installed,
+        }
+    }
+
+    pub(crate) fn from_identity(
+        identity: PackageIdentity,
+        repository: Option<String>,
+        name: String,
+        listing: PackageListing,
+        installed: bool,
+    ) -> Self {
+        Self {
+            backend: identity.backend,
+            kind: identity.kind,
+            scope: identity.scope,
+            native_key: identity.native_key,
+            origin: identity.origin,
+            display_name: identity.display_name,
+            source: identity.backend.package_source(),
             repository,
             name,
             listing,
@@ -70,21 +89,16 @@ impl PackageRecord {
 }
 
 impl PackageRecord {
-    #[allow(dead_code)]
-    pub(crate) fn identity(&self) -> system_tools_core::PackageIdentity {
-        system_tools_core::PackageIdentity::new(
-            self.backend,
-            match self.source {
-                PackageSource::Aur => system_tools_core::PackageKind::Aur,
-                PackageSource::Flatpak => system_tools_core::PackageKind::Flatpak,
-                PackageSource::Snap => system_tools_core::PackageKind::Snap,
-                PackageSource::Brew => system_tools_core::PackageKind::BrewFormula,
-                PackageSource::Nix => system_tools_core::PackageKind::Nix,
-                _ => system_tools_core::PackageKind::System,
-            },
-            self.scope,
-            self.native_key.clone(),
-        )
+    pub(crate) fn identity(&self) -> PackageIdentity {
+        let mut identity =
+            PackageIdentity::new(self.backend, self.kind, self.scope, self.native_key.clone());
+        if let Some(origin) = &self.origin {
+            identity = identity.with_origin(origin.clone());
+        }
+        if let Some(display_name) = &self.display_name {
+            identity = identity.with_display_name(display_name.clone());
+        }
+        identity
     }
 }
 

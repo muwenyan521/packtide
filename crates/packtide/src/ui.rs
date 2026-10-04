@@ -24,5 +24,6 @@ pub(crate) use fzf::{
 };
 pub(crate) use preview::{preview_command, shell_quote};
 pub(crate) use rows::{
-    PackageListMode, parse_package_row, render_package_rows, write_install_catalog,
+    PackageListMode, parse_package_identity, parse_package_row, render_package_rows,
+    write_install_catalog,
 };

@@ -1,13 +1,13 @@
 use anyhow::{Result, bail};
 use system_tools_core::{
-    BackendId, BackendRegistry, NativePackageKey, PackageBackend, PackageId, PackageSource,
-    ReadOperation,
+    BackendId, BackendRegistry, NativePackageKey, PackageBackend, PackageId, PackageIdentity,
+    PackageSource, ReadOperation,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::sources::valid_package_name;
 
-use super::parse_package_row;
+use super::{parse_package_identity, parse_package_row};
 
 pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let kind = args.first().map(String::as_str).unwrap_or_default();
@@ -28,63 +28,59 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         bail!("{}", crate::locale::text(lang, "preview.invalid_row", &[]));
     }
     let source = parsed.as_ref().map(|row| row.source);
-    let identity_key = parsed
-        .as_ref()
-        .and_then(|row| {
-            row.repository
-                .as_deref()
-                .map(|repo| format!("{repo}/{}", row.name))
-        })
-        .unwrap_or_else(|| display_package.to_owned());
-    let backend_id = match source {
-        Some(PackageSource::Pacman) if matches!(kind, "install" | "downgrade") => {
+    let parsed_identity = parse_package_identity(raw_row)
+        .ok_or_else(|| anyhow::anyhow!("invalid package identity in preview row"))?;
+    let backend_id = match parsed_identity.backend {
+        BackendId::Pacman if matches!(kind, "install" | "downgrade") => {
             if crate::app::package_helper().unwrap_or("paru") == "yay" {
                 BackendId::Yay
             } else {
                 BackendId::Paru
             }
         }
-        Some(PackageSource::Pacman) => BackendId::Pacman,
-        Some(PackageSource::Aur) => {
-            if crate::app::package_helper().unwrap_or("paru") == "yay" {
-                BackendId::Yay
-            } else {
-                BackendId::Paru
-            }
-        }
-        Some(PackageSource::Flatpak) => BackendId::Flatpak,
-        Some(PackageSource::Apt) => BackendId::Apt,
-        Some(PackageSource::Dnf) => BackendId::Dnf5,
-        Some(PackageSource::Zypper) => BackendId::Zypper,
-        Some(PackageSource::Apk) => BackendId::Apk,
-        Some(PackageSource::Xbps) => BackendId::Xbps,
-        Some(PackageSource::Snap) => BackendId::Snap,
-        Some(PackageSource::Brew) => BackendId::Brew,
-        Some(PackageSource::Nix) => BackendId::Nix,
-        None => BackendId::Pacman,
+        backend => backend,
     };
     let identity_key = if matches!(kind, "remove" | "downgrade")
-        && !matches!(source, Some(PackageSource::Flatpak))
+        && parsed_identity.backend != BackendId::Flatpak
     {
         format!("detail-qi:{display_package}")
+    } else if matches!(kind, "install" | "downgrade")
+        && let Some(repository) = parsed.as_ref().and_then(|row| row.repository.as_deref())
+    {
+        format!("{repository}/{display_package}")
     } else {
-        identity_key
+        parsed_identity.native_key.as_str().to_owned()
+    };
+    let identity_kind = if backend_id == parsed_identity.backend {
+        parsed_identity.kind
+    } else {
+        backend_id.default_kind()
+    };
+    let identity_scope = if backend_id == parsed_identity.backend {
+        parsed_identity.scope
+    } else {
+        backend_id.default_scope()
     };
     let registry = BackendRegistry::default();
     let backend = registry
         .backend(backend_id)
         .ok_or_else(|| anyhow::anyhow!("unknown backend {}", backend_id.as_str()))?;
-    let identity = backend.identity(NativePackageKey::new(identity_key)?);
-    if !matches!(
-        (kind, source),
-        (
-            "remove",
-            Some(PackageSource::Flatpak | PackageSource::Pacman | PackageSource::Aur)
-        ) | (
-            "downgrade",
-            Some(PackageSource::Pacman | PackageSource::Aur)
-        ) | ("install", Some(PackageSource::Pacman | PackageSource::Aur))
-    ) {
+    let mut identity = PackageIdentity::new(
+        backend_id,
+        identity_kind,
+        identity_scope,
+        NativePackageKey::new(identity_key)?,
+    );
+    if let Some(origin) = &parsed_identity.origin {
+        identity = identity.with_origin(origin.clone());
+    }
+    if let Some(display_name) = &parsed_identity.display_name {
+        identity = identity.with_display_name(display_name.clone());
+    }
+    let supported = matches!(kind, "remove" | "install") && source.is_some()
+        || kind == "downgrade"
+            && matches!(source, Some(PackageSource::Pacman | PackageSource::Aur));
+    if !supported {
         bail!(
             "{}",
             crate::locale::text(lang, "preview.unknown_kind", &[("kind", kind)])
@@ -92,13 +88,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     }
     let detail = backend.read(ReadOperation::Details {
         package: PackageId::new(identity.key().as_str())?,
-        scope: if source == Some(PackageSource::Flatpak)
-            && parsed.as_ref().and_then(|row| row.repository.as_deref()) == Some("flatpak@system")
-        {
-            system_tools_core::PackageScope::System
-        } else {
-            system_tools_core::PackageScope::User
-        },
+        scope: identity.scope,
     });
     let (metadata, failure) = match detail.as_ref() {
         Ok(result) => match result.details.as_ref() {
@@ -117,14 +107,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         },
         Err(error) => ("", Some(error.to_string())),
     };
-    let source_key = match source {
-        Some(PackageSource::Pacman) => "source.pacman",
-        Some(PackageSource::Aur) => "source.aur",
-        Some(PackageSource::Flatpak) => "source.flatpak",
-        Some(_) => "backend.native",
-        None => "source.pacman",
-    };
-    let source_label = crate::locale::text(lang, source_key, &[]);
+    let source_label = crate::locale::source_label(lang, source.unwrap_or(PackageSource::Pacman));
     let version = preview_version(raw_row);
     let width = std::env::var("FZF_PREVIEW_COLUMNS")
         .or_else(|_| std::env::var("COLUMNS"))

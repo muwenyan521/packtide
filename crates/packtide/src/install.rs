@@ -1,11 +1,11 @@
 use anyhow::{Result, bail};
 use std::env;
 use std::time::{Instant, SystemTime};
-use system_tools_core::{PackageSource, TransactionAction};
+use system_tools_core::TransactionAction;
 
 use crate::sources::install_rows;
 use crate::transaction::execute_package;
-use crate::ui::{parse_package_row, write_install_catalog};
+use crate::ui::{parse_package_identity, parse_package_row, write_install_catalog};
 
 pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
     let started = Instant::now();
@@ -82,18 +82,31 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         let Some(package) = parse_package_row(row) else {
             continue;
         };
-        match package.source {
-            PackageSource::Aur => aur.push(package.name),
-            PackageSource::Pacman => {
+        let Some(identity) = parse_package_identity(row) else {
+            bail!(
+                "{}: install selection has invalid package identity",
+                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+            );
+        };
+        match identity.backend {
+            system_tools_core::BackendId::Paru | system_tools_core::BackendId::Yay => {
+                aur.push(identity.native_key.as_str().to_owned());
+            }
+            system_tools_core::BackendId::Pacman => {
                 let Some(repository) = package.repository else {
                     bail!(
                         "{}: install selection is missing its pacman repository",
                         crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
                     );
                 };
-                repo.push(format!("{repository}/{}", package.name));
+                let name = identity.native_key.as_str();
+                repo.push(if name.contains('/') {
+                    name.to_owned()
+                } else {
+                    format!("{repository}/{name}")
+                });
             }
-            PackageSource::Flatpak => bail!(
+            system_tools_core::BackendId::Flatpak => bail!(
                 "{}: Flatpak rows are not valid in the package installer",
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             ),
