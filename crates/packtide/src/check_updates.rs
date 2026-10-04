@@ -278,7 +278,7 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
 }
 
 fn query_native_updates() -> Vec<PackageUpdate> {
-    let backend = crate::app::native_backend().ok();
+    let backend = crate::app::native_backend("capability.updates").ok();
     let Some(backend) = backend else {
         return Vec::new();
     };

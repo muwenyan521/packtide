@@ -25,8 +25,18 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         "the installed package lookup",
         false,
     )?;
-    let helper = crate::app::package_helper_for("package removal")?;
-    let records = rows(&pacman, helper)?;
+    let native = crate::app::native_backend("capability.remove")?;
+    let pacman = if native == BackendId::Pacman {
+        Some(pacman)
+    } else {
+        None
+    };
+    let helper = if native == BackendId::Pacman {
+        Some(crate::app::package_helper_for("package removal")?)
+    } else {
+        None
+    };
+    let records = rows(pacman.as_deref(), helper, native)?;
     let rows = render_package_rows(&records, PackageListMode::Remove);
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
@@ -38,7 +48,14 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         println!("{rows}");
         return Ok(());
     }
-    let Some(selected) = select_rows(helper, true, rows, query, Some(started_at))? else {
+    let Some(selected) = select_rows(
+        helper.unwrap_or("native"),
+        true,
+        rows,
+        query,
+        Some(started_at),
+    )?
+    else {
         println!(
             "{}",
             crate::locale::text(crate::locale::current(), "selection.remove.none", &[])
@@ -62,7 +79,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         let (backend, kind) = match package.source {
             PackageSource::Pacman => (BackendId::Pacman, PackageKind::System),
             PackageSource::Aur => (
-                if helper == "yay" {
+                if helper == Some("yay") {
                     BackendId::Yay
                 } else {
                     BackendId::Paru
@@ -91,7 +108,9 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
             package_ids.push(identity);
         }
     }
-    if !package_ids.is_empty() {
+    if !package_ids.is_empty()
+        && let Some(helper) = helper
+    {
         execute_package_typed(helper, TransactionAction::Remove, &package_ids)?;
     }
     if command_exists("flatpak") {
@@ -114,7 +133,43 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::PackageRecord>> {
+fn rows(
+    pacman: Option<&std::path::Path>,
+    helper: Option<&str>,
+    native: BackendId,
+) -> Result<Vec<crate::model::PackageRecord>> {
+    if native != BackendId::Pacman {
+        let registry = BackendRegistry::default();
+        let provider = registry
+            .backend(native)
+            .ok_or_else(|| anyhow::anyhow!("native backend is not registered"))?;
+        let installed = provider
+            .read(ReadOperation::Installed)
+            .map_err(|e| anyhow::anyhow!("native installed query failed: {e}"))?;
+        return Ok(installed
+            .packages
+            .into_iter()
+            .map(|package| {
+                let source = match native {
+                    BackendId::Apt => PackageSource::Apt,
+                    BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
+                    BackendId::Zypper => PackageSource::Zypper,
+                    BackendId::Apk => PackageSource::Apk,
+                    BackendId::Xbps => PackageSource::Xbps,
+                    _ => PackageSource::Pacman,
+                };
+                PackageRecord::legacy(
+                    source,
+                    None,
+                    package.native_key.as_str().to_owned(),
+                    PackageListing::Version(String::new()),
+                    true,
+                )
+            })
+            .collect());
+    }
+    let pacman = pacman.expect("pacman path for Arch removal");
+    let helper = helper.expect("AUR helper for Arch removal");
     let registry = BackendRegistry::default();
     let typed_installed = registry
         .backend(BackendId::Pacman)
