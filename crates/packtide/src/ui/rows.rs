@@ -120,7 +120,7 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
     let color = super::source_color(record.source);
     let installed = if mode == PackageListMode::Install && record.installed {
         format!(
-            " \x1b[32m{}\x1b[0m",
+            "\x1b[32m{}\x1b[0m",
             crate::locale::text(crate::locale::current(), "package.installed", &[])
         )
     } else {
@@ -159,6 +159,7 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
             write!(output, "{app_name} ({origin})")?;
         }
     }
+    output.write_all(b"\t")?;
     output.write_all(installed.as_bytes())
 }
 
@@ -233,7 +234,7 @@ fn encode_text(value: &str) -> String {
 }
 
 fn decode_text(value: &str) -> Option<String> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let bytes = (0..value.len())
@@ -441,8 +442,23 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
             _ => return None,
         }
     }
+    let valid_kind = match backend {
+        BackendId::Brew => matches!(kind, PackageKind::BrewFormula | PackageKind::BrewCask),
+        BackendId::Pacman
+        | BackendId::Apt
+        | BackendId::Dnf5
+        | BackendId::Dnf4
+        | BackendId::Zypper
+        | BackendId::Apk
+        | BackendId::Xbps
+        | BackendId::Paru
+        | BackendId::Yay
+        | BackendId::Flatpak
+        | BackendId::Snap
+        | BackendId::Nix => kind == backend.default_kind(),
+    };
     if backend.package_source() != parsed.source
-        || kind != backend.default_kind()
+        || !valid_kind
         || (parsed.source == PackageSource::Aur
             && !matches!(backend, BackendId::Paru | BackendId::Yay))
     {
@@ -604,6 +620,63 @@ mod tests {
     }
 
     #[test]
+    fn rendered_rows_keep_status_in_a_fixed_fifth_column() {
+        for mode in [
+            super::PackageListMode::Install,
+            super::PackageListMode::Remove,
+        ] {
+            for installed in [false, true] {
+                let record = PackageRecord::legacy(
+                    PackageSource::Pacman,
+                    Some("core".to_owned()),
+                    "bash".to_owned(),
+                    PackageListing::Version("5.3-1".to_owned()),
+                    installed,
+                );
+
+                let row = super::render_package_rows(&[record], mode);
+
+                let clean = super::super::strip_ansi(&row);
+                let fields = clean.split('\t').collect::<Vec<_>>();
+                assert_eq!(fields.len(), 5, "mode={mode:?} installed={installed}");
+                assert_eq!(fields[3].trim(), "5.3-1");
+                let expected = if mode == super::PackageListMode::Install && installed {
+                    crate::locale::text(crate::locale::current(), "package.installed", &[])
+                } else {
+                    String::new()
+                };
+                assert_eq!(fields[4].trim(), expected);
+                assert_eq!(parse_package_row(&row).unwrap().name, "bash");
+            }
+        }
+    }
+
+    #[test]
+    fn identity_parser_rejects_kinds_from_another_backend() {
+        for (backend, kind) in [
+            (BackendId::Brew, PackageKind::System),
+            (BackendId::Apt, PackageKind::BrewCask),
+        ] {
+            let record = PackageRecord::from_identity(
+                PackageIdentity::new(
+                    backend,
+                    kind,
+                    backend.default_scope(),
+                    NativePackageKey::new("native-key").unwrap(),
+                ),
+                None,
+                "display-name".to_owned(),
+                PackageListing::Version("1.0".to_owned()),
+                false,
+            );
+
+            let row = super::render_package_rows(&[record], super::PackageListMode::Install);
+
+            assert_eq!(parse_package_identity(&row), None);
+        }
+    }
+
+    #[test]
     fn preserves_long_package_values_for_fzf_accept() {
         let record = PackageRecord::legacy(
             PackageSource::Pacman,
@@ -654,6 +727,38 @@ mod tests {
                 Some("core"),
             ),
             (
+                BackendId::Apt,
+                PackageKind::System,
+                PackageScope::System,
+                None,
+                None,
+                Some("main"),
+            ),
+            (
+                BackendId::Zypper,
+                PackageKind::System,
+                PackageScope::System,
+                None,
+                None,
+                Some("repo-oss"),
+            ),
+            (
+                BackendId::Apk,
+                PackageKind::System,
+                PackageScope::System,
+                None,
+                None,
+                Some("main"),
+            ),
+            (
+                BackendId::Xbps,
+                PackageKind::System,
+                PackageScope::System,
+                None,
+                None,
+                Some("current"),
+            ),
+            (
                 BackendId::Dnf4,
                 PackageKind::System,
                 PackageScope::System,
@@ -692,6 +797,14 @@ mod tests {
                 None,
                 None,
                 Some("formula"),
+            ),
+            (
+                BackendId::Brew,
+                PackageKind::BrewCask,
+                PackageScope::Profile,
+                None,
+                None,
+                Some("cask"),
             ),
             (
                 BackendId::Nix,
