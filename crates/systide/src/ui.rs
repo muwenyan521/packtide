@@ -39,9 +39,18 @@ fn classify_fzf_status(status: ExitStatus) -> Result<bool> {
 }
 
 pub(crate) fn collect_update_rows(lang: Lang) -> Result<String> {
-    let native = detect_native_backend_from_file("/etc/os-release").ok();
+    let rows = collect_update_rows_for_host(lang)?;
+    if rows.is_empty() {
+        bail!("no update sources returned data");
+    }
+    Ok(rows)
+}
+
+fn collect_update_rows_for_host(lang: Lang) -> Result<String> {
+    let native = detect_native_backend_from_file("/etc/os-release")
+        .context("native backend detection failed")?;
     let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
-    collect_update_rows_with_resolver(lang, native, &resolver)
+    collect_update_rows_with_resolver(lang, Some(native), &resolver)
 }
 
 fn collect_update_rows_with_resolver(
@@ -262,7 +271,7 @@ pub(crate) fn show_update_list(lang: Lang) -> Result<Option<bool>> {
             msg(lang, "capability.catalog")
         )
     })?;
-    let rows = collect_update_rows(lang)?;
+    let rows = collect_update_rows_for_host(lang)?;
     if rows.is_empty() {
         println!("{}", msg(lang, "list.empty"));
         return Ok(None);

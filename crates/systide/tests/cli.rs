@@ -9,6 +9,8 @@ struct Fixture(PathBuf);
 #[test]
 fn optional_update_list_preserves_providers_and_reports_failures() {
     let fixture = Fixture::new();
+    fixture.write_executable("pacman", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable("checkupdates", "#!/bin/sh\nexit 0\n");
     fixture.write_executable(
         "snap",
         "#!/bin/sh\nprintf 'Name Version Rev Publisher Notes\\nhello-world 2 2 acme -\\n'\n",
@@ -100,10 +102,24 @@ fn list_missing_fzf_names_the_affected_picker() {
 }
 
 #[test]
+fn list_data_missing_native_tools_is_not_successful() {
+    let output = Command::new(env!("CARGO_BIN_EXE_systide"))
+        .arg("--list-data")
+        .env("PATH", "/definitely/nonexistent/systide-path")
+        .output()
+        .expect("run systide list-data with an unavailable native backend");
+
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("native backend detection failed"), "{error}");
+}
+
+#[test]
 fn list_cancel_preserves_source_order_and_localized_layout() {
     let fixture = Fixture::new();
     let rows = fixture.path().join("rows");
     let args = fixture.path().join("args");
+    fixture.write_executable("pacman", "#!/bin/sh\nexit 0\n");
     fixture.write_executable("checkupdates", "#!/bin/sh\nprintf 'bash 5.3 -> 5.4\\n'\n");
     fixture.write_executable("paru", "#!/bin/sh\nprintf 'aur-tool 1.0 -> 1.1\\n'\n");
     fixture.write_executable("flatpak", "#!/bin/sh\nprintf 'org.example.App 2.0\\n'\n");
@@ -141,6 +157,7 @@ fn list_cancel_preserves_source_order_and_localized_layout() {
 #[test]
 fn list_picker_failure_is_not_reported_as_cancellation() {
     let fixture = Fixture::new();
+    fixture.write_executable("pacman", "#!/bin/sh\nexit 0\n");
     fixture.write_executable("checkupdates", "#!/bin/sh\nprintf 'bash 5.3 -> 5.4\\n'\n");
     fixture.write_executable("fzf", "#!/bin/sh\ncat >/dev/null\nexit 2\n");
     let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
