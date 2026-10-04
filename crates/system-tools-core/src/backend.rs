@@ -1161,16 +1161,11 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
             "--columns=application,origin,name,installation",
         ],
     );
-    let contents = if let Ok(cached) = cached {
-        if cached.status.success() && !cached.stdout.trim().is_empty() {
-            cached.stdout
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-    let contents = if !contents.is_empty() {
+    let cached_text = cached
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| output.stdout);
+    let contents = if let Some(contents) = select_flatpak_catalog(cached_text.as_deref(), None) {
         contents
     } else {
         let live = run_backend_command(
@@ -1189,7 +1184,7 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
                 &live,
             ));
         }
-        live.stdout
+        select_flatpak_catalog(None, Some(&live.stdout)).unwrap_or_default()
     };
     if !contents.trim().is_empty()
         && let Some(cache) = cache_dir
@@ -1198,6 +1193,13 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
         let _ = store.write_atomic("catalog", &contents);
     }
     Ok(contents)
+}
+
+fn select_flatpak_catalog(cached: Option<&str>, live: Option<&str>) -> Option<String> {
+    cached
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| live.filter(|text| !text.trim().is_empty()))
+        .map(str::to_owned)
 }
 
 fn identity_for(
@@ -1615,6 +1617,19 @@ mod tests {
         );
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].native_key.as_str(), "org.example.App");
+    }
+
+    #[test]
+    fn flatpak_catalog_selection_prefers_cache_then_live_and_rejects_empty() {
+        assert_eq!(
+            super::select_flatpak_catalog(Some("cached"), Some("live")),
+            Some("cached".to_owned())
+        );
+        assert_eq!(
+            super::select_flatpak_catalog(Some("\n"), Some("live")),
+            Some("live".to_owned())
+        );
+        assert_eq!(super::select_flatpak_catalog(None, Some("\n")), None);
     }
 
     #[test]
