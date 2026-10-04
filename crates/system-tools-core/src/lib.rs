@@ -6,6 +6,7 @@ mod executable;
 mod package;
 mod plan;
 mod platform;
+mod registry;
 mod transaction;
 
 pub use backend::{
@@ -27,6 +28,7 @@ pub use platform::{
     NativeBackend, PlatformError, backend_from_os_release, detect_native_backend,
     detect_native_backend_from_file, detect_native_backend_from_path, parse_os_release,
 };
+pub use registry::BackendRegistry;
 pub use transaction::{
     CommandPrivilege, PackageUpgradeCommand, PackageUpgradePrivilege, package_keyring_plan,
     package_upgrade_command, package_upgrade_command_for, run_package_keyring_update_with_resolver,

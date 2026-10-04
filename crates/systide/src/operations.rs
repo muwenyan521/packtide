@@ -1,12 +1,9 @@
 use anyhow::Result;
 #[cfg(test)]
 use system_tools_core::detect_native_backend;
-use system_tools_core::{
-    BackendId, BuiltinBackend, CapabilitySet, NativeBackend, PackageBackend,
-    detect_native_backend_from_file,
-};
+use system_tools_core::{BackendId, NativeBackend, detect_native_backend_from_file};
 
-use crate::messages::{Lang, backend_label, log_info, msg};
+use crate::messages::{Lang, log_info, msg};
 
 pub(crate) fn perform_update(backend: BackendId, lang: Lang) -> Result<()> {
     crate::snapshot::create(lang);
@@ -41,16 +38,6 @@ fn backend_for_detection(
         NativeBackend::Apk => BackendId::Apk,
         NativeBackend::Xbps => BackendId::Xbps,
     };
-    if !BuiltinBackend::new(backend)
-        .capabilities()
-        .contains(CapabilitySet::SYSTEM_UPGRADE)
-    {
-        return Err(anyhow::anyhow!(
-            "{} ({})",
-            msg(lang, "backend.unsupported"),
-            backend_label(lang, native),
-        ));
-    }
     Ok(backend)
 }
 
@@ -95,15 +82,13 @@ mod tests {
     }
 
     #[test]
-    fn supported_non_arch_native_backend_stays_explicitly_unsupported() {
-        let error = detect_manager_from_input(
+    fn supported_non_arch_native_backend_is_selected() {
+        let manager = detect_manager_from_input(
             "ID=fedora\n",
             |command| command == OsStr::new("dnf"),
             Lang::Zh,
         )
-        .expect_err("Fedora is detected but unsupported by systide");
-        let message = error.to_string();
-        assert!(message.contains(msg(Lang::Zh, "backend.unsupported")));
-        assert!(message.contains(msg(Lang::Zh, "backend.dnf")));
+        .expect("Fedora should select dnf");
+        assert_eq!(manager, BackendId::Dnf5);
     }
 }

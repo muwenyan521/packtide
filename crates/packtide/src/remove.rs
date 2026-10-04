@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::{
-    BackendId, BuiltinBackend, NativePackageKey, PackageBackend, PackageIdentity, PackageKind,
+    BackendId, BackendRegistry, NativePackageKey, PackageBackend, PackageIdentity, PackageKind,
     PackageScope, PackageSource, ReadOperation, TransactionAction, command_exists,
 };
 
@@ -105,7 +105,10 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
 }
 
 fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::PackageRecord>> {
-    let typed_installed = BuiltinBackend::new(BackendId::Pacman)
+    let registry = BackendRegistry::default();
+    let typed_installed = registry
+        .backend(BackendId::Pacman)
+        .ok_or_else(|| anyhow::anyhow!("backend pacman is not registered"))?
         .read(ReadOperation::Installed)
         .map_err(|error| anyhow::anyhow!("pacman typed installed read failed: {error}"))?;
     let foreign = if helper == "yay" {
@@ -113,7 +116,9 @@ fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::Pack
     } else {
         BackendId::Paru
     };
-    let foreign_installed = BuiltinBackend::new(foreign)
+    let foreign_installed = registry
+        .backend(foreign)
+        .ok_or_else(|| anyhow::anyhow!("backend {} is not registered", foreign.as_str()))?
         .read(ReadOperation::Installed)
         .with_context(|| format!("{} typed installed read failed", foreign.as_str()))?
         .packages;
@@ -141,7 +146,9 @@ fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::Pack
         installed: true,
     }));
     if command_exists("flatpak") {
-        let typed_flatpak = BuiltinBackend::new(BackendId::Flatpak)
+        let typed_flatpak = registry
+            .backend(BackendId::Flatpak)
+            .ok_or_else(|| anyhow::anyhow!("backend flatpak is not registered"))?
             .read(ReadOperation::Installed)
             .map_err(|error| anyhow::anyhow!("Flatpak typed installed read failed: {error}"))?
             .packages;

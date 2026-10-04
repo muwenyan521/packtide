@@ -46,15 +46,17 @@ fn main() -> Result<()> {
     messages::log_info(lang, msg(lang, "permission"));
     require_privileged()?;
     let manager = detect_manager(lang)?;
-    messages::log_info(lang, msg(lang, "news_step"));
-    let news = fetch_news(&cli.news_source, cli.count, lang);
-    if let Some(news) = news {
-        if !news.is_empty() {
-            print_news(lang, &news);
+    if manager == system_tools_core::BackendId::Pacman {
+        messages::log_info(lang, msg(lang, "news_step"));
+        let news = fetch_news(&cli.news_source, cli.count, lang);
+        if let Some(news) = news {
+            if !news.is_empty() {
+                print_news(lang, &news);
+            }
+        } else if !confirm_force(lang)? {
+            println!("{}", msg(lang, "cancel"));
+            return Ok(());
         }
-    } else if !confirm_force(lang)? {
-        println!("{}", msg(lang, "cancel"));
-        return Ok(());
     }
     if !confirm_start(lang, manager.as_str())? {
         println!("{}", msg(lang, "cancel"));

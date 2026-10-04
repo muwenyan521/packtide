@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
-use system_tools_core::{BackendId, BuiltinBackend, PackageBackend, ReadOperation};
+use system_tools_core::{BackendId, BackendRegistry, PackageBackend, ReadOperation};
 
 #[cfg(test)]
 pub(crate) use pacman::parse_install_rows;
@@ -31,7 +31,10 @@ pub(crate) fn install_rows_streaming(
     mut write_official: impl FnMut(&PackageRecord) -> Result<()>,
 ) -> Result<InstallCatalog> {
     let started = Instant::now();
-    let typed_catalog = BuiltinBackend::new(BackendId::Pacman)
+    let registry = BackendRegistry::default();
+    let typed_catalog = registry
+        .backend(BackendId::Pacman)
+        .ok_or_else(|| anyhow::anyhow!("backend pacman is not registered"))?
         .read(ReadOperation::Catalog)
         .map_err(|error| anyhow::anyhow!("pacman catalog exited: typed read failed: {error}"))?;
     let installed = Command::new(_pacman)
@@ -82,7 +85,9 @@ pub(crate) fn install_rows_streaming(
         } else {
             BackendId::Yay
         };
-        let typed_aur = BuiltinBackend::new(aur_backend)
+        let typed_aur = registry
+            .backend(aur_backend)
+            .ok_or_else(|| anyhow::anyhow!("backend {} is not registered", aur_backend.as_str()))?
             .read(ReadOperation::Catalog)
             .map_err(|error| anyhow::anyhow!("AUR catalog exited: typed read failed: {error}"))?;
         let typed_aur_names = typed_aur
