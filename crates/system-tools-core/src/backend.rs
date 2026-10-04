@@ -623,7 +623,12 @@ pub trait PackageBackend {
         }
         if matches!(
             self.id(),
-            BackendId::Apt | BackendId::Dnf5 | BackendId::Dnf4 | BackendId::Snap | BackendId::Brew | BackendId::Nix
+            BackendId::Apt
+                | BackendId::Dnf5
+                | BackendId::Dnf4
+                | BackendId::Snap
+                | BackendId::Brew
+                | BackendId::Nix
         ) {
             if let Some(package) = operation.packages().iter().find(|package| {
                 package.backend != self.id()
@@ -644,22 +649,26 @@ pub trait PackageBackend {
                 BackendId::Dnf4 => "dnf",
                 _ => self.id().as_str(),
             };
-            let program = resolver
-                .resolve(OsStr::new(executable))
-                .ok_or_else(|| BackendError::CommandUnavailable {
+            let program = resolver.resolve(OsStr::new(executable)).ok_or_else(|| {
+                BackendError::CommandUnavailable {
                     backend: self.id(),
                     operation: "write transaction",
                     command: executable.to_owned(),
-                })?;
-            let result = match self.id() {
-                BackendId::Apt => {
-                    AptBackend::from_paths(&program, &program, &program)
-                        .transaction(operation.clone()).map_err(|error| error.to_string())
                 }
+            })?;
+            let result = match self.id() {
+                BackendId::Apt => AptBackend::from_paths(&program, &program, &program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
                 BackendId::Dnf5 | BackendId::Dnf4 => {
-                    let generation = if self.id() == BackendId::Dnf5 { DnfGeneration::Dnf5 } else { DnfGeneration::Dnf4 };
+                    let generation = if self.id() == BackendId::Dnf5 {
+                        DnfGeneration::Dnf5
+                    } else {
+                        DnfGeneration::Dnf4
+                    };
                     DnfBackend::from_paths(generation, program)
-                        .transaction(operation.clone()).map_err(|error| error.to_string())
+                        .transaction(operation.clone())
+                        .map_err(|error| error.to_string())
                 }
                 BackendId::Snap => crate::backends::snap::SnapBackend::from_paths(program)
                     .transaction(operation.clone())
@@ -917,7 +926,6 @@ impl PackageBackend for BuiltinBackend {
             details,
         })
     }
-
 }
 
 fn read_pacman(
@@ -1920,7 +1928,11 @@ mod tests {
             BuiltinBackend::new(BackendId::Nix).scope(),
             PackageScope::Profile
         );
-        assert!(BuiltinBackend::new(BackendId::Apt).capabilities().contains(CapabilitySet::INSTALL));
+        assert!(
+            BuiltinBackend::new(BackendId::Apt)
+                .capabilities()
+                .contains(CapabilitySet::INSTALL)
+        );
     }
 
     #[test]
@@ -2184,11 +2196,7 @@ mod tests {
 
     #[test]
     fn command_for_rejects_unimplemented_backends_before_identity_or_argv() {
-        let unsupported = [
-            BackendId::Zypper,
-            BackendId::Apk,
-            BackendId::Xbps,
-        ];
+        let unsupported = [BackendId::Zypper, BackendId::Apk, BackendId::Xbps];
         let foreign_identity = BuiltinBackend::new(BackendId::Pacman)
             .identity(NativePackageKey::new("same-name").unwrap());
 
@@ -2215,6 +2223,39 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error, BackendError::InvalidPlan);
+    }
+
+    #[test]
+    fn native_provider_dispatch_uses_resolved_provider_argv() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("native-dispatch-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for executable in ["apt-get", "dnf", "dnf5"] {
+            let path = directory.join(executable);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
+        for (id, executable) in [
+            (BackendId::Apt, "apt-get"),
+            (BackendId::Dnf4, "dnf"),
+            (BackendId::Dnf5, "dnf5"),
+        ] {
+            let backend = BuiltinBackend::new(id);
+            let operation = WriteOperation::Install {
+                packages: vec![backend.identity(NativePackageKey::new("hello").unwrap())],
+            };
+            let transaction = backend.write_with_resolver(operation, &resolver).unwrap();
+            assert_eq!(transaction.command.program, directory.join(executable));
+            assert_eq!(transaction.command.args, ["install", "hello"]);
+            assert_eq!(transaction.command.privilege, CommandPrivilege::Elevated);
+            println!(
+                "{id:?} resolved={} argv={:?}",
+                transaction.command.program.display(),
+                transaction.command.args
+            );
+        }
     }
 
     #[test]

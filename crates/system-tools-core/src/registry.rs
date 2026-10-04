@@ -106,7 +106,7 @@ mod tests {
         let registry = BackendRegistry::default();
         let package = PackageIdentity::new(
             BackendId::Apt,
-            PackageKind::System,
+            PackageKind::Aur,
             PackageScope::System,
             PackageId::new("display-label-not-a-key").unwrap(),
         );
@@ -116,11 +116,13 @@ mod tests {
         let resolver = ExecutableResolver::from_path(None);
         let error = registry
             .write_with_resolver(operation, &resolver)
-            .expect_err("missing apt command is expected");
+            .expect_err("tampered identity must be rejected before resolving apt-get");
         assert!(matches!(
             error,
-            BackendError::UnsupportedCapability {
-                backend: BackendId::Apt,
+            BackendError::IdentityMismatch {
+                expected_backend: BackendId::Apt,
+                expected_kind: PackageKind::System,
+                actual_kind: PackageKind::Aur,
                 ..
             }
         ));
