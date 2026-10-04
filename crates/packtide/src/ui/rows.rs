@@ -86,24 +86,17 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
         if rows_started {
             output.write_all(b"\n")?;
         }
-        let padding = 35usize.saturating_sub(UnicodeWidthStr::width(name));
-        let installed = if catalog.installed.contains(name) {
-            format!(
-                " \x1b[32m{}\x1b[0m",
-                crate::locale::text(crate::locale::current(), "package.installed", &[])
-            )
-        } else {
-            String::new()
+        let record = PackageRecord {
+            source: PackageSource::Aur,
+            repository: Some("aur".to_owned()),
+            name: name.to_owned(),
+            listing: PackageListing::Version("-".to_owned()),
+            installed: catalog.installed.contains(name),
         };
-        write!(
-            output,
-            "PKG:aur\t\x1b[35m{:<16}\x1b[0m\t\x1b[1m{name}\x1b[0m",
-            "aur"
-        )?;
-        output.write_all(&SPACES[..padding.min(SPACES.len())])?;
-        output.write_all(b"\t-                   ")?;
-        output.write_all(installed.as_bytes())?;
-        aur_rendered += name.len() + padding + installed.len() + 24;
+        let mut rendered = Vec::new();
+        write_package_row(&mut rendered, &record, PackageListMode::Install)?;
+        output.write_all(&rendered)?;
+        aur_rendered += rendered.len();
         rows_started = true;
     }
     if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
@@ -131,33 +124,9 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
     } else {
         String::new()
     };
-    let localized_source;
-    let source = if let Some(repository) = record.repository.as_deref() {
-        if repository == "flatpak@system" {
-            "flatpak@system"
-        } else {
-            repository
-        }
-    } else {
-        localized_source = crate::locale::source_label(crate::locale::current(), record.source);
-        localized_source.as_str()
-    };
-    let internal = match record.source {
-        PackageSource::Flatpak if record.repository.as_deref() == Some("flatpak@system") => {
-            "FLTK:flatpak@system".to_owned()
-        }
-        PackageSource::Flatpak => match &record.listing {
-            PackageListing::Flatpak { origin, .. } if !origin.is_empty() => {
-                format!("FLTK:{origin}")
-            }
-            _ => "FLTK:flatpak".to_owned(),
-        },
-        PackageSource::Aur => "PKG:aur".to_owned(),
-        PackageSource::Pacman => {
-            format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
-        }
-    };
-    let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source));
+    let internal = hidden_source_token(record);
+    let source = source_label(record);
+    let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source.as_str()));
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
     if mode == PackageListMode::Install {
         write!(output, "{internal}\t\x1b[{color}m{source}")?;
@@ -189,6 +158,36 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
         }
     }
     output.write_all(installed.as_bytes())
+}
+
+fn source_label(record: &PackageRecord) -> String {
+    if let Some(repository) = record.repository.as_deref() {
+        if repository == "flatpak@system" {
+            "flatpak@system".to_owned()
+        } else {
+            repository.to_owned()
+        }
+    } else {
+        crate::locale::source_label(crate::locale::current(), record.source)
+    }
+}
+
+fn hidden_source_token(record: &PackageRecord) -> String {
+    match record.source {
+        PackageSource::Flatpak if record.repository.as_deref() == Some("flatpak@system") => {
+            "FLTK:flatpak@system".to_owned()
+        }
+        PackageSource::Flatpak => match &record.listing {
+            PackageListing::Flatpak { origin, .. } if !origin.is_empty() => {
+                format!("FLTK:{origin}")
+            }
+            _ => "FLTK:flatpak".to_owned(),
+        },
+        PackageSource::Aur => "PKG:aur".to_owned(),
+        PackageSource::Pacman => {
+            format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
+        }
+    }
 }
 
 pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
