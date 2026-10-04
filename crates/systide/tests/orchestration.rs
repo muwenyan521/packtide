@@ -54,7 +54,7 @@ fn list_data_skips_absent_optional_backends_after_native_success() {
         String::from_utf8_lossy(&output.stderr)
     );
     let rows = String::from_utf8_lossy(&output.stdout);
-    assert!(rows.contains("[Pacman]"), "{rows}");
+    assert!(rows.contains("native\tnative 1 -> 2"), "{rows}");
     assert!(rows.contains("native 1 -> 2"), "{rows}");
     assert!(
         !rows.contains("[Snap]"),
