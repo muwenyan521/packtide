@@ -253,11 +253,7 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
         .split_once('@')
         .unwrap_or((source_label, "user"));
     let (source, repository) = match source_metadata::parse_label(source_label) {
-        Some(source) => (
-            source,
-            (source == PackageSource::Flatpak && scope == "system")
-                .then(|| "flatpak@system".to_owned()),
-        ),
+        Some(source) => (source, source_metadata::legacy_repository(source, scope)),
         None if crate::sources::valid_package_name(source_label) => {
             (PackageSource::Pacman, Some(source_label.to_owned()))
         }
@@ -278,14 +274,11 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
     if !token.contains(':') {
         let backend = parsed.source.backend_for_source();
         let scope = source_metadata::legacy_scope(parsed.source, parsed.repository.as_deref());
-        let key = if parsed.source == PackageSource::Pacman || parsed.source == PackageSource::Aur {
-            parsed.name.clone()
-        } else {
-            parsed
-                .repository
-                .as_deref()
-                .map_or_else(|| parsed.name.clone(), |r| format!("{r}/{}", parsed.name))
-        };
+        let key = source_metadata::legacy_native_key(
+            parsed.source,
+            parsed.repository.as_deref(),
+            &parsed.name,
+        );
         return Some(PackageIdentity::new(
             backend,
             parsed.source.default_kind(),

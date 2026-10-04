@@ -76,8 +76,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         identity = identity.with_display_name(display_name.clone());
     }
     let supported = matches!(kind, "remove" | "install") && source.is_some()
-        || kind == "downgrade"
-            && matches!(source, Some(PackageSource::Pacman | PackageSource::Aur));
+        || kind == "downgrade" && source.is_some_and(crate::source_metadata::supports_downgrade);
     if !supported {
         bail!(
             "{}",

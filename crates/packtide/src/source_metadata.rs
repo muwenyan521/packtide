@@ -28,6 +28,36 @@ pub(crate) fn package_route(backend: BackendId) -> PackageRoute {
     }
 }
 
+pub(crate) fn uses_bare_native_key(source: PackageSource) -> bool {
+    matches!(
+        package_route(source.backend_for_source()),
+        PackageRoute::ArchRepository | PackageRoute::ArchForeign
+    )
+}
+
+pub(crate) fn supports_downgrade(source: PackageSource) -> bool {
+    uses_bare_native_key(source)
+}
+
+pub(crate) fn legacy_native_key(
+    source: PackageSource,
+    repository: Option<&str>,
+    name: &str,
+) -> String {
+    if uses_bare_native_key(source) {
+        name.to_owned()
+    } else {
+        repository.map_or_else(
+            || name.to_owned(),
+            |repository| format!("{repository}/{name}"),
+        )
+    }
+}
+
+pub(crate) fn legacy_repository(source: PackageSource, scope: &str) -> Option<String> {
+    (source == PackageSource::Flatpak && scope == "system").then(|| FLATPAK_SYSTEM.to_owned())
+}
+
 pub(crate) fn legacy_scope(source: PackageSource, repository: Option<&str>) -> PackageScope {
     if source == PackageSource::Flatpak && repository == Some(FLATPAK_SYSTEM) {
         PackageScope::System
