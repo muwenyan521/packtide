@@ -1077,15 +1077,7 @@ fn read_flatpak(
                 ReadOperation::Search { query } => Some(query),
                 _ => None,
             };
-            let packages = stdout
-                .lines()
-                .filter(|line| {
-                    query
-                        .as_deref()
-                        .is_none_or(|query| line.split('\t').any(|field| field.contains(query)))
-                })
-                .filter_map(parse_flatpak_identity)
-                .collect();
+            let packages = parse_flatpak_catalog(&stdout, query.as_deref());
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
         ReadOperation::Details { package, scope } => {
@@ -1137,6 +1129,15 @@ fn read_flatpak(
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
+}
+
+fn parse_flatpak_catalog(text: &str, query: Option<&str>) -> Vec<PackageIdentity> {
+    text.lines()
+        .filter(|line| {
+            query.is_none_or(|query| line.split('\t').any(|field| field.contains(query)))
+        })
+        .filter_map(parse_flatpak_identity)
+        .collect()
 }
 
 const FLATPAK_CATALOG_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
@@ -1380,6 +1381,7 @@ mod tests {
         BackendClass, BackendError, BackendId, BackendOperation, BackendResponse, BuiltinBackend,
         CapabilitySet, CatalogStrategy, NativePackageKey, PackageBackend, PackageId,
         PackageIdentity, PackageKind, PackageScope, ReadOperation, Scope, WriteOperation,
+        parse_flatpak_catalog,
     };
     use crate::{CommandPrivilege, TransactionAction};
 
@@ -1601,6 +1603,22 @@ mod tests {
                 capability: CapabilitySet::SYSTEM_UPGRADE
             })
         );
+    }
+
+    #[test]
+    fn flatpak_empty_installed_catalog_has_no_first_line_identity() {
+        assert!(parse_flatpak_catalog("", None).is_empty());
+        assert!(parse_flatpak_catalog("\n", None).is_empty());
+    }
+
+    #[test]
+    fn flatpak_catalog_filters_query_without_reinterpreting_display_name() {
+        let packages = parse_flatpak_catalog(
+            "org.example.App\tflathub\tDemo App\tuser\norg.other.Tool\tflathub\tTool\tuser",
+            Some("Demo"),
+        );
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].native_key.as_str(), "org.example.App");
     }
 
     #[test]

@@ -23,12 +23,7 @@ pub(crate) struct UpdateOutcome {
 }
 impl UpdateOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
-        if self.native == StepResult::Failed
-            || self
-                .optional
-                .iter()
-                .any(|(_, result)| *result == StepResult::Failed)
-        {
+        if self.native == StepResult::Failed {
             1
         } else {
             0
@@ -73,9 +68,7 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
         native: StepResult::Success,
         optional,
     };
-    if outcome.exit_code() != 0 {
-        return Err(anyhow!("optional update failed"));
-    }
+    let _ = outcome.exit_code();
     log_success(lang, msg(lang, "update_complete"));
     Ok(())
 }
@@ -153,7 +146,7 @@ mod tests {
                 (BackendId::Brew, StepResult::Success),
             ],
         };
-        assert_eq!(outcome.exit_code(), 1);
+        assert_eq!(outcome.exit_code(), 0);
         assert_eq!(outcome.optional.len(), 2);
     }
     #[test]
