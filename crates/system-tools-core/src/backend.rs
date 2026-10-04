@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 
 use crate::ExecutableResolver;
+use crate::backends::apt::AptBackend;
+use crate::backends::dnf::{DnfBackend, DnfGeneration};
 use crate::plan::CommandPlan;
 use crate::{CommandPrivilege, TransactionAction};
 
@@ -619,6 +621,65 @@ pub trait PackageBackend {
                 capability,
             });
         }
+        if matches!(
+            self.id(),
+            BackendId::Apt | BackendId::Dnf5 | BackendId::Dnf4 | BackendId::Snap | BackendId::Brew | BackendId::Nix
+        ) {
+            if let Some(package) = operation.packages().iter().find(|package| {
+                package.backend != self.id()
+                    || package.kind != self.kind()
+                    || package.scope != self.scope()
+            }) {
+                return Err(BackendError::IdentityMismatch {
+                    expected_backend: self.id(),
+                    actual_backend: package.backend,
+                    expected_kind: self.kind(),
+                    actual_kind: package.kind,
+                    expected_scope: self.scope(),
+                    actual_scope: package.scope,
+                });
+            }
+            let executable = match self.id() {
+                BackendId::Apt => "apt-get",
+                BackendId::Dnf4 => "dnf",
+                _ => self.id().as_str(),
+            };
+            let program = resolver
+                .resolve(OsStr::new(executable))
+                .ok_or_else(|| BackendError::CommandUnavailable {
+                    backend: self.id(),
+                    operation: "write transaction",
+                    command: executable.to_owned(),
+                })?;
+            let result = match self.id() {
+                BackendId::Apt => {
+                    AptBackend::from_paths(&program, &program, &program)
+                        .transaction(operation.clone()).map_err(|error| error.to_string())
+                }
+                BackendId::Dnf5 | BackendId::Dnf4 => {
+                    let generation = if self.id() == BackendId::Dnf5 { DnfGeneration::Dnf5 } else { DnfGeneration::Dnf4 };
+                    DnfBackend::from_paths(generation, program)
+                        .transaction(operation.clone()).map_err(|error| error.to_string())
+                }
+                BackendId::Snap => crate::backends::snap::SnapBackend::from_paths(program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
+                BackendId::Brew => crate::backends::brew::BrewBackend::from_paths(program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
+                BackendId::Nix => crate::backends::nix::NixBackend::from_paths(program)
+                    .transaction(operation.clone())
+                    .map_err(|error| error.to_string()),
+                _ => unreachable!(),
+            };
+            return result.map(|plan| plan.command).map_err(|message| {
+                BackendError::CommandFailed {
+                    backend: self.id(),
+                    operation: "write transaction",
+                    message,
+                }
+            });
+        }
         let expected_scope = operation
             .packages()
             .first()
@@ -757,6 +818,7 @@ impl PackageBackend for BuiltinBackend {
                 | BackendId::Zypper
                 | BackendId::Apk
                 | BackendId::Xbps
+                | BackendId::Snap
         ) {
             PackageScope::System
         } else if matches!(self.0, BackendId::Brew | BackendId::Nix) {
@@ -777,10 +839,20 @@ impl PackageBackend for BuiltinBackend {
             .union(CapabilitySet::REMOVE)
             .union(CapabilitySet::UPGRADE);
         match self.0 {
-            BackendId::Flatpak => write,
+            BackendId::Flatpak | BackendId::Brew => write,
+            BackendId::Snap => write.union(CapabilitySet::SYSTEM_UPGRADE),
+            BackendId::Nix => CapabilitySet::CATALOG
+                .union(CapabilitySet::SEARCH)
+                .union(CapabilitySet::INSTALLED)
+                .union(CapabilitySet::DETAILS)
+                .union(CapabilitySet::INSTALL)
+                .union(CapabilitySet::REMOVE)
+                .union(CapabilitySet::UPGRADE),
             BackendId::Pacman | BackendId::Paru | BackendId::Yay => write
                 .union(CapabilitySet::DOWNGRADE)
                 .union(CapabilitySet::SYSTEM_UPGRADE),
+            BackendId::Apt => write.union(CapabilitySet::SYSTEM_UPGRADE),
+            BackendId::Dnf5 | BackendId::Dnf4 => write.union(CapabilitySet::SYSTEM_UPGRADE),
             _ => CapabilitySet::empty(),
         }
     }
@@ -822,6 +894,11 @@ impl PackageBackend for BuiltinBackend {
             BackendId::Pacman => read_pacman(operation.clone(), self.id())?,
             BackendId::Paru | BackendId::Yay => read_aur(operation.clone(), self.id())?,
             BackendId::Flatpak => read_flatpak(operation.clone(), self.id())?,
+            BackendId::Apt => read_apt(operation.clone(), self.id())?,
+            BackendId::Dnf5 | BackendId::Dnf4 => read_dnf(operation.clone(), self.id())?,
+            BackendId::Snap => read_snap(operation.clone())?,
+            BackendId::Brew => read_brew(operation.clone())?,
+            BackendId::Nix => read_nix(operation.clone())?,
             _ => {
                 return Ok(ReadResult {
                     backend: self.id(),
@@ -840,6 +917,7 @@ impl PackageBackend for BuiltinBackend {
             details,
         })
     }
+
 }
 
 fn read_pacman(
@@ -1038,6 +1116,426 @@ fn read_aur(
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
+}
+
+fn execute_plan(
+    plan: &CommandPlan,
+    backend: BackendId,
+    operation: &'static str,
+) -> Result<crate::Output, BackendError> {
+    crate::run_capture_path(&plan.program, &plan.args, true).map_err(|e| {
+        BackendError::CommandFailed {
+            backend,
+            operation,
+            message: e.to_string(),
+        }
+    })
+}
+
+fn read_apt(
+    operation: ReadOperation,
+    backend: BackendId,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let b = AptBackend::from_path(std::env::var_os("PATH").as_deref()).map_err(|e| {
+        BackendError::CommandUnavailable {
+            backend,
+            operation: "read packages",
+            command: e.to_string(),
+        }
+    })?;
+    let (plan, parser): (CommandPlan, u8) = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
+            (b.catalog_plan(), 0)
+        }
+        ReadOperation::Installed => (b.installed_plan(), 1),
+        ReadOperation::Details { package, .. } => (
+            b.details_plan(package)
+                .map_err(|e| BackendError::CommandFailed {
+                    backend,
+                    operation: "read package details",
+                    message: e.to_string(),
+                })?,
+            2,
+        ),
+        ReadOperation::Updates => (b.updates_plan(), 3),
+    };
+    if matches!(operation, ReadOperation::RefreshCatalog) {
+        let refresh = execute_plan(&b.update_catalog_plan(), backend, "refresh package catalog")?;
+        if !refresh.status.success() {
+            return Err(command_failed(backend, "refresh package catalog", &refresh));
+        }
+    }
+    let out = execute_plan(&plan, backend, "read packages")?;
+    if !out.status.success() && parser != 2 {
+        return Err(command_failed(backend, "read packages", &out));
+    }
+    if parser == 2 {
+        let key = match &operation {
+            ReadOperation::Details { package, .. } => package.as_str().to_owned(),
+            _ => unreachable!(),
+        };
+        let id = identity_for(backend, PackageKind::System, PackageScope::System, key)?;
+        return Ok((
+            vec![id],
+            CatalogStrategy::Enumerated,
+            Some(ReadDetails {
+                stdout: out.stdout,
+                stderr: out.stderr,
+                status: out.status,
+                success: out.status.success(),
+            }),
+        ));
+    }
+    let mut packages: Vec<PackageIdentity> = match parser {
+        0 => crate::backends::apt::parse_deb822(&out.stdout)
+            .map_err(|e| BackendError::CommandFailed {
+                backend,
+                operation: "parse package catalog",
+                message: e.to_string(),
+            })?
+            .into_iter()
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect(),
+        1 => crate::backends::apt::parse_dpkg_query(&out.stdout)
+            .map_err(|e| BackendError::CommandFailed {
+                backend,
+                operation: "parse installed packages",
+                message: e.to_string(),
+            })?
+            .into_iter()
+            .filter(|p| p.installed)
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect(),
+        _ => crate::backends::apt::parse_simulation(&out.stdout)
+            .map_err(|e| BackendError::CommandFailed {
+                backend,
+                operation: "parse package updates",
+                message: e.to_string(),
+            })?
+            .into_iter()
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect(),
+    };
+    if let ReadOperation::Search { query } = operation {
+        packages.retain(|p| p.native_key.as_str().contains(&query));
+    }
+    Ok((packages, CatalogStrategy::Enumerated, None))
+}
+
+fn read_dnf(
+    operation: ReadOperation,
+    backend: BackendId,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    let generation = if backend == BackendId::Dnf5 {
+        DnfGeneration::Dnf5
+    } else {
+        DnfGeneration::Dnf4
+    };
+    let b = DnfBackend::detect(std::env::var_os("PATH").as_deref()).map_err(|e| {
+        BackendError::CommandUnavailable {
+            backend,
+            operation: "read packages",
+            command: e.to_string(),
+        }
+    })?;
+    let b = DnfBackend::from_paths(generation, b.program);
+    let (plan, parser) = match &operation {
+        ReadOperation::Catalog | ReadOperation::Search { .. } | ReadOperation::RefreshCatalog => {
+            (b.list_plan(), false)
+        }
+        ReadOperation::Installed => (b.installed_plan(), true),
+        ReadOperation::Updates => (b.updates_plan(), false),
+        ReadOperation::Details { package, .. } => (
+            b.details_plan(package)
+                .map_err(|e| BackendError::CommandFailed {
+                    backend,
+                    operation: "read package details",
+                    message: e.to_string(),
+                })?,
+            false,
+        ),
+    };
+    let out = execute_plan(&plan, backend, "read packages")?;
+    if !out.status.success() && !matches!(operation, ReadOperation::Details { .. }) {
+        return Err(command_failed(backend, "read packages", &out));
+    }
+    if matches!(operation, ReadOperation::Details { .. }) {
+        let key = match operation {
+            ReadOperation::Details { package, .. } => package.as_str().to_owned(),
+            _ => unreachable!(),
+        };
+        return Ok((
+            vec![identity_for(
+                backend,
+                PackageKind::System,
+                PackageScope::System,
+                key,
+            )?],
+            CatalogStrategy::Enumerated,
+            Some(ReadDetails {
+                stdout: out.stdout,
+                stderr: out.stderr,
+                status: out.status,
+                success: out.status.success(),
+            }),
+        ));
+    }
+    let parsed = if generation == DnfGeneration::Dnf5 {
+        crate::backends::dnf::parse_dnf5_json(&out.stdout).map_err(|e| {
+            BackendError::CommandFailed {
+                backend,
+                operation: "parse DNF catalog",
+                message: e.to_string(),
+            }
+        })?
+    } else {
+        crate::backends::dnf::parse_dnf4_table(&out.stdout).map_err(|e| {
+            BackendError::CommandFailed {
+                backend,
+                operation: "parse DNF catalog",
+                message: e.to_string(),
+            }
+        })?
+    };
+    let mut packages: Vec<_> = parsed
+        .into_iter()
+        .filter(|p| !parser || p.installed)
+        .filter_map(|p| {
+            identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+        })
+        .collect();
+    if let ReadOperation::Search { query } = operation {
+        packages.retain(|p| p.native_key.as_str().contains(&query));
+    }
+    Ok((packages, CatalogStrategy::Enumerated, None))
+}
+
+fn optional_read_error(backend: BackendId, error: impl fmt::Display) -> BackendError {
+    BackendError::CommandFailed {
+        backend,
+        operation: "read packages",
+        message: error.to_string(),
+    }
+}
+
+fn read_snap(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    use crate::backends::snap::{SnapBackend, parse_info, parse_list, parse_search, parse_updates};
+    let backend = BackendId::Snap;
+    let provider =
+        SnapBackend::from_path(std::env::var_os("PATH").as_deref()).map_err(|error| {
+            BackendError::CommandUnavailable {
+                backend,
+                operation: "read packages",
+                command: error.to_string(),
+            }
+        })?;
+    let plan = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => {
+            return Err(BackendError::QueryRequired { backend });
+        }
+        ReadOperation::Search { query } => provider.search_plan(query),
+        ReadOperation::Installed => provider.installed_plan(),
+        ReadOperation::Updates => provider.updates_plan(),
+        ReadOperation::Details { package, scope } => {
+            if *scope != PackageScope::System {
+                return Err(optional_read_error(backend, "snap requires system scope"));
+            }
+            provider
+                .details_plan(package)
+                .map_err(|error| optional_read_error(backend, error))?
+        }
+    };
+    let output = execute_plan(&plan, backend, "read packages")?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let packages = match &operation {
+        ReadOperation::Updates => parse_updates(&output.stdout)
+            .map_err(|error| optional_read_error(backend, error))?
+            .iter()
+            .map(|package| package.identity())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| optional_read_error(backend, error))?,
+        _ => {
+            let records = match &operation {
+                ReadOperation::Search { .. } => parse_search(&output.stdout),
+                ReadOperation::Installed => parse_list(&output.stdout),
+                ReadOperation::Details { .. } => parse_info(&output.stdout),
+                _ => unreachable!(),
+            }
+            .map_err(|error| optional_read_error(backend, error))?;
+            records
+                .iter()
+                .map(|package| package.identity())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| optional_read_error(backend, error))?
+        }
+    };
+    let details = matches!(operation, ReadOperation::Details { .. }).then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((packages, CatalogStrategy::DirectQuery, details))
+}
+
+fn read_brew(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    use crate::backends::brew::{BrewBackend, BrewKind, identity, parse_info, parse_outdated};
+    let backend = BackendId::Brew;
+    let provider =
+        BrewBackend::from_path(std::env::var_os("PATH").as_deref()).map_err(|error| {
+            BackendError::CommandUnavailable {
+                backend,
+                operation: "read packages",
+                command: error.to_string(),
+            }
+        })?;
+    let plan = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
+            provider.formulae_plan()
+        }
+        ReadOperation::Installed => {
+            let mut plan = provider.formulae_plan();
+            plan.args = ["info", "--json=v2", "--installed", "--formula"]
+                .map(OsString::from)
+                .to_vec();
+            plan
+        }
+        ReadOperation::Details { package, scope } => {
+            if *scope != PackageScope::Profile {
+                return Err(optional_read_error(backend, "brew requires profile scope"));
+            }
+            provider
+                .info_plan(package.as_str(), BrewKind::Formula)
+                .map_err(|error| optional_read_error(backend, error))?
+        }
+        ReadOperation::Updates => provider.outdated_plan(),
+    };
+    let output = execute_plan(&plan, backend, "read packages")?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let packages = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
+            let query = match &operation {
+                ReadOperation::Search { query } => Some(query.as_str()),
+                _ => None,
+            };
+            output
+                .stdout
+                .split_whitespace()
+                .filter(|token| query.is_none_or(|q| token.contains(q)))
+                .map(|token| {
+                    identity_for(
+                        backend,
+                        PackageKind::BrewFormula,
+                        PackageScope::Profile,
+                        token.to_owned(),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        ReadOperation::Installed | ReadOperation::Details { .. } => {
+            parse_info(&output.stdout, BrewKind::Formula)
+                .map_err(|error| optional_read_error(backend, error))?
+                .iter()
+                .map(|package| identity(package, PackageScope::Profile))
+                .collect()
+        }
+        ReadOperation::Updates => parse_outdated(&output.stdout)
+            .map_err(|error| optional_read_error(backend, error))?
+            .into_iter()
+            .map(|package| {
+                identity_for(
+                    backend,
+                    package.kind.package_kind(),
+                    PackageScope::Profile,
+                    package.token,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let details = matches!(operation, ReadOperation::Details { .. }).then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((packages, CatalogStrategy::Enumerated, details))
+}
+
+fn read_nix(
+    operation: ReadOperation,
+) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
+    use crate::backends::nix::{NixBackend, identity, parse_profile, parse_search};
+    let backend = BackendId::Nix;
+    let provider = NixBackend::from_path(std::env::var_os("PATH").as_deref()).map_err(|error| {
+        BackendError::CommandUnavailable {
+            backend,
+            operation: "read packages",
+            command: error.to_string(),
+        }
+    })?;
+    let plan = match &operation {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => {
+            return Err(BackendError::QueryRequired { backend });
+        }
+        ReadOperation::Search { query } => provider
+            .search_plan(query)
+            .map_err(|error| optional_read_error(backend, error))?,
+        ReadOperation::Installed => provider.profile_list_plan(),
+        ReadOperation::Details { package, scope } => {
+            if *scope != PackageScope::Profile {
+                return Err(optional_read_error(backend, "nix requires profile scope"));
+            }
+            provider
+                .details_plan(package.as_str())
+                .map_err(|error| optional_read_error(backend, error))?
+        }
+        ReadOperation::Updates => {
+            return Err(BackendError::UnsupportedCapability {
+                backend,
+                capability: CapabilitySet::UPDATES,
+            });
+        }
+    };
+    let output = provider
+        .execute(&plan)
+        .map_err(|error| optional_read_error(backend, error))?;
+    if !output.status.success() {
+        return Err(command_failed(backend, "read packages", &output));
+    }
+    let records = match &operation {
+        ReadOperation::Search { .. } => parse_search(&output.stdout),
+        _ => parse_profile(&output.stdout),
+    }
+    .map_err(|error| optional_read_error(backend, error))?;
+    let packages = records
+        .iter()
+        .filter(|record| match &operation {
+            ReadOperation::Details { package, .. } => record.selector == package.as_str(),
+            _ => true,
+        })
+        .map(identity)
+        .collect();
+    let details = matches!(operation, ReadOperation::Details { .. }).then_some(ReadDetails {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        status: output.status,
+        success: true,
+    });
+    Ok((packages, CatalogStrategy::DirectQuery, details))
 }
 
 fn read_flatpak(
@@ -1422,10 +1920,7 @@ mod tests {
             BuiltinBackend::new(BackendId::Nix).scope(),
             PackageScope::Profile
         );
-        assert_eq!(
-            BuiltinBackend::new(BackendId::Apt).capabilities().bits(),
-            CapabilitySet::empty().bits()
-        );
+        assert!(BuiltinBackend::new(BackendId::Apt).capabilities().contains(CapabilitySet::INSTALL));
     }
 
     #[test]
@@ -1635,7 +2130,7 @@ mod tests {
     #[test]
     fn unsupported_write_is_rejected_before_command_spawn() {
         let backend = BuiltinBackend::new(BackendId::Apt);
-        let operation = WriteOperation::Install {
+        let operation = WriteOperation::Downgrade {
             packages: vec![backend.identity(NativePackageKey::new("same-name").unwrap())],
         };
 
@@ -1643,7 +2138,7 @@ mod tests {
             backend.write(operation),
             Err(BackendError::UnsupportedCapability {
                 backend: BackendId::Apt,
-                capability: CapabilitySet::INSTALL,
+                capability: CapabilitySet::DOWNGRADE,
             })
         );
     }
@@ -1690,15 +2185,9 @@ mod tests {
     #[test]
     fn command_for_rejects_unimplemented_backends_before_identity_or_argv() {
         let unsupported = [
-            BackendId::Apt,
-            BackendId::Dnf5,
-            BackendId::Dnf4,
             BackendId::Zypper,
             BackendId::Apk,
             BackendId::Xbps,
-            BackendId::Snap,
-            BackendId::Brew,
-            BackendId::Nix,
         ];
         let foreign_identity = BuiltinBackend::new(BackendId::Pacman)
             .identity(NativePackageKey::new("same-name").unwrap());
@@ -1726,6 +2215,121 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error, BackendError::InvalidPlan);
+    }
+
+    #[test]
+    fn optional_backend_dispatch_uses_provider_plans_and_parsers() {
+        if std::env::var_os("OPTIONAL_BACKEND_DISPATCH_CHILD").is_some() {
+            for (id, key, expected) in [
+                (
+                    BackendId::Snap,
+                    "hello@latest/stable#strict",
+                    vec!["install", "hello"],
+                ),
+                (BackendId::Brew, "hello", vec!["install", "hello"]),
+                (
+                    BackendId::Nix,
+                    "hello",
+                    vec![
+                        "--extra-experimental-features",
+                        "nix-command flakes",
+                        "profile",
+                        "install",
+                        "hello",
+                    ],
+                ),
+            ] {
+                let backend = BuiltinBackend::new(id);
+                let records = backend.installed().unwrap();
+                assert_eq!(records.packages.len(), 1);
+                assert_eq!(records.packages[0].backend, id);
+                assert_eq!(records.packages[0].scope, backend.scope());
+                let operation = WriteOperation::Install {
+                    packages: vec![backend.identity(NativePackageKey::new(key).unwrap())],
+                };
+                let transaction = backend.write(operation).unwrap();
+                assert_eq!(transaction.command.args, expected);
+                assert_eq!(
+                    transaction.command.privilege,
+                    if id == BackendId::Snap {
+                        CommandPrivilege::Elevated
+                    } else {
+                        CommandPrivilege::User
+                    }
+                );
+                println!(
+                    "{id:?}: installed={} args={:?}",
+                    records.packages.len(),
+                    transaction.command.args
+                );
+            }
+            let nix = BuiltinBackend::new(BackendId::Nix);
+            let result = nix.search("hello").unwrap();
+            assert_eq!(
+                result.packages[0].native_key.as_str(),
+                "nixpkgs#legacyPackages.x86_64-linux.hello"
+            );
+            assert!(matches!(
+                nix.updates(),
+                Err(BackendError::UnsupportedCapability { .. })
+            ));
+            assert!(matches!(
+                nix.catalog(),
+                Err(BackendError::QueryRequired { .. })
+            ));
+            let snap = BuiltinBackend::new(BackendId::Snap);
+            assert!(matches!(
+                snap.catalog(),
+                Err(BackendError::QueryRequired { .. })
+            ));
+            let classic =
+                snap.identity(NativePackageKey::new("hello@latest/stable#classic").unwrap());
+            assert!(matches!(
+                snap.write(WriteOperation::Install {
+                    packages: vec![classic]
+                }),
+                Err(BackendError::CommandFailed { .. })
+            ));
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("optional-backend-dispatch-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, script) in [
+            (
+                "snap",
+                "#!/bin/sh\nprintf 'Name Version Rev Tracking Publisher Notes\\nhello 1.0 1 latest/stable publisher -\\n'\n",
+            ),
+            (
+                "brew",
+                "#!/bin/sh\nprintf '%s\\n' '{\"formulae\":[{\"name\":\"hello\",\"full_name\":\"homebrew/core/hello\",\"versions\":{\"stable\":\"1.0\"}}]}'\n",
+            ),
+            (
+                "nix",
+                "#!/bin/sh\ncase \"$3\" in\nsearch) printf '%s\\n' '{\"legacyPackages.x86_64-linux.hello\":{\"pname\":\"hello\",\"version\":\"1.0\"}}';;\n*) printf '%s\\n' '[{\"name\":\"hello\",\"attrPath\":\"hello\",\"active\":true}]';;\nesac\n",
+            ),
+        ] {
+            let path = directory.join(name);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backend::tests::optional_backend_dispatch_uses_provider_plans_and_parsers",
+                "--nocapture",
+            ])
+            .env("OPTIONAL_BACKEND_DISPATCH_CHILD", "1")
+            .env("PATH", &directory)
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

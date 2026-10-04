@@ -52,6 +52,39 @@ fn s(v: &Value, k: &str) -> Option<String> {
 pub fn parse_profile(input: &str) -> Result<Vec<NixPackage>, NixError> {
     let root: Value =
         serde_json::from_str(input).map_err(|e| NixError::MalformedJson(e.to_string()))?;
+    if let Some(elements) = root.get("elements").and_then(Value::as_object) {
+        return elements
+            .iter()
+            .enumerate()
+            .map(|(index, (selector, record))| {
+                let attr = s(record, "attrPath").ok_or(NixError::MissingField {
+                    record: index + 1,
+                    field: "attrPath",
+                })?;
+                Ok(NixPackage {
+                    selector: selector.clone(),
+                    attr,
+                    original_url: s(record, "originalUrl"),
+                    name: s(record, "pname").unwrap_or_else(|| selector.clone()),
+                    store_paths: record
+                        .get("storePaths")
+                        .and_then(Value::as_array)
+                        .map(|paths| {
+                            paths
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    active: record
+                        .get("active")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                })
+            })
+            .collect();
+    }
     let xs = root
         .as_array()
         .or_else(|| root.get("elements").and_then(Value::as_array))
@@ -95,7 +128,29 @@ pub fn parse_profile(input: &str) -> Result<Vec<NixPackage>, NixError> {
         .collect()
 }
 pub fn parse_search(input: &str) -> Result<Vec<NixPackage>, NixError> {
-    parse_profile(input)
+    let root: Value =
+        serde_json::from_str(input).map_err(|error| NixError::MalformedJson(error.to_string()))?;
+    let records = root
+        .as_object()
+        .ok_or_else(|| NixError::MalformedJson("expected search attribute object".into()))?;
+    records
+        .iter()
+        .enumerate()
+        .map(|(index, (attr, record))| {
+            let name = s(record, "pname").ok_or(NixError::MissingField {
+                record: index + 1,
+                field: "pname",
+            })?;
+            Ok(NixPackage {
+                selector: format!("nixpkgs#{attr}"),
+                attr: attr.clone(),
+                original_url: Some("nixpkgs".into()),
+                name,
+                store_paths: Vec::new(),
+                active: false,
+            })
+        })
+        .collect()
 }
 #[derive(Clone, Debug)]
 pub struct NixBackend {
@@ -209,6 +264,13 @@ pub fn identity(p: &NixPackage) -> PackageIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modern_profile_preserves_named_selector_when_elements_are_an_object() {
+        let records = parse_profile(r#"{"elements":{"hello":{"attrPath":"legacyPackages.x86_64-linux.hello","originalUrl":"flake:nixpkgs","storePaths":["/nix/store/hello"],"active":true}}}"#).unwrap();
+        assert_eq!(records[0].selector, "hello");
+        assert_eq!(records[0].store_paths, ["/nix/store/hello"]);
+        assert_eq!(identity(&records[0]).native_key.as_str(), "hello");
+    }
     #[test]
     fn fixture_preserves_selector_and_paths() {
         let p = parse_profile(include_str!(
