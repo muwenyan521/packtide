@@ -44,7 +44,7 @@ locale 环境变量。新增语言只需增加对应资源文件并接入 loader
 | --- | --- | --- | --- | --- |
 | Pacman | system | `pacman -Su`（特权）及 keyring | install/remove/check-updates/downgrade | Arch smoke（宿主） |
 | APT | system | `apt-get upgrade -y`（特权） | core contract；无 Arch picker | Debian、Ubuntu container |
-| DNF5 | system | `dnf upgrade -y`（特权） | core contract；无 Arch picker | Fedora container |
+| DNF5 | system | `dnf5 upgrade -y`（特权） | core contract；无 Arch picker | Fedora container |
 | DNF4 | system | `dnf upgrade -y`（特权） | core contract；无 Arch picker | Rocky、Alma container |
 | Zypper | system | `zypper update -y`（特权） | core contract；无 Arch picker | openSUSE container |
 | APK | system | `apk upgrade`（特权） | core contract；无 Arch picker | Alpine container |
@@ -69,6 +69,18 @@ Pacman/Arch 兼容入口，不能把它们当作 APT、DNF、Zypper、APK 或 XB
 当作功能承诺。
 
 完整的后端、scope、命令和验证 lane 见 [`docs/package-manager-support.md`](docs/package-manager-support.md)。
+
+### Picker UI 契约
+
+包源颜色、标签和 scope 元数据集中在 `source_metadata`/locale 层。picker 行使用稳定的
+tab 列：隐藏 token、可见 source、包名、版本/details、已安装标记。隐藏 token 保留
+`BackendId`、`PackageScope`、kind、native key 及 provider metadata，选中和 preview 恢复
+typed identity；不能从可见标签反推事务身份。事务摘要会显示 scope 和 privilege，details
+失败会在 preview 中显示诊断而不是伪造空结果。
+
+包名、版本和 preview 标题按终端 display width 对齐，CJK 名称不会挤坏列；窄 preview 使用
+ellipsis。相关 row/preview 单测已覆盖固定列、identity round-trip、CJK 宽度和窄窗口；完整
+`systide` 更新流仍按下方证据状态区分“已测代码”和“真实环境运行”。
 
 ## 当前状态
 
@@ -150,3 +162,27 @@ cargo build --workspace --release
 Release 构建固定使用 workspace `profile.release`（thin LTO、8 个 codegen unit、符号剥离和 abort panic）。发布记录应同时保存版本、目标架构、Rust toolchain 与两个 binary 的 SHA-256；当前记录见 `commands/release-sha256.txt`。
 
 参考代码快照位于仓库外的 `../independent-linux-tool-reference-20260924/`，不参与构建。
+
+## 验证状态（2026-10-05）
+
+当前源码 HEAD 为 `c1689444f0916843ca3bd86fcf273091dde09b92`。阶段状态只按可重放工件记录，
+不等同于把规划文件中的复选框改成完成：
+
+| 范围 | 状态 | 可复查工件与边界 |
+| --- | --- | --- |
+| 阶段 5.1-5.3 | PASS | `.omo/evidence/stage5-gate-review-current.md`、`stage5-contract-final.md`：typed update identity/current/candidate、native-first/optional-after-native、optional diagnostics/non-zero、DNF4/DNF5 dispatch、空 `--list-data` 失败。 |
+| Core fake integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`、`stage6-hook-proof-20261005.log`：每个 backend 的 typed install/remove/upgrade plan，fake argv/locale/status/stderr/privilege，以及 optional provider fake PATH。 |
+| Packtide/systide fake integration | PASS | 同一 Stage 6 证据覆盖 Snap/Brew/Nix update rows、hidden identity preview、optional failure 后继续，以及缺失 optional skip/多 provider failure。 |
+| Transaction generation/privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt`、`transaction-gate-live.txt`：Dnf5 使用 `dnf5`、Dnf4 使用 `dnf`，Snap refresh 为 elevated，system write 清理 loader 环境并通过 privilege runner。 |
+| 阶段 6 自动化测试 | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`：core/packtide/systide focused suites、fmt 和 diff check 通过。 |
+| 阶段 6 真实 UI/PTY | PARTIAL | `.omo/evidence/phase6-systide-ui-smoke-20261001.md` 及其 transcript/capture：zh/en 取消、新闻数量、权限提示和 80x24 布局已观察；没有接受真实特权包事务，也没有宣称 mirror-warning/partial-upgrade 分支通过。 |
+| disposable package-manager matrix | ENVIRONMENT-BLOCKED | `.omo/evidence/wave1-final-matrix/` 记录锁定镜像 metadata/cleanup；`.omo/evidence/wave1-todo2-current/all.jsonl` 记录容器仓库/软件源 TLS、Snap cloud-image 下载阻塞及 aggregate non-zero。环境失败保持失败，不降级为 pass。 |
+
+### 环境阻塞说明
+
+矩阵必须在可访问锁定镜像、发行版软件源、Homebrew/Nix registry 和 Snap Store 的环境中
+重跑。当前主机的 `doctor`/`list-images` 元数据检查可以通过，`audit-cleanup` 也必须保持
+`containers=[]`、`qemu=false`、`temp=[]`；但完整 `all` 只有在所有 lane 返回 pass 时才算
+通过。Snap VM 还需要 `/dev/kvm`、QEMU、`cloud-localds` 或 `xorriso`，以及 guest egress。
+不要把 `unavailable`、TLS/EOF、仓库 metadata 失败或 guest 未输出 `PM_MATRIX_SNAP_OK`
+记录成支持矩阵通过。
