@@ -204,6 +204,12 @@ impl BrewBackend {
     pub fn casks_plan(&self) -> CommandPlan {
         self.read(["casks"])
     }
+    pub fn search_plan(&self, query: &str) -> Result<CommandPlan, BrewError> {
+        if query.trim().is_empty() {
+            return Err(BrewError::InvalidPackageId);
+        }
+        Ok(self.read(["search", "--formula", "--", query]))
+    }
     pub fn info_plan(&self, token: &str, kind: BrewKind) -> Result<CommandPlan, BrewError> {
         if token.trim().is_empty() {
             return Err(BrewError::InvalidPackageId);

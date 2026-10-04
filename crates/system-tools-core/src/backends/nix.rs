@@ -180,6 +180,23 @@ impl NixBackend {
     pub fn profile_list_plan(&self) -> CommandPlan {
         self.plan(["profile", "list", "--json"])
     }
+    pub fn update_candidate_plan(&self, package: &NixPackage) -> Result<CommandPlan, NixError> {
+        let original_url = package
+            .original_url
+            .as_deref()
+            .ok_or(NixError::MissingField {
+                record: 1,
+                field: "originalUrl",
+            })?;
+        if package.store_paths.is_empty() {
+            return Err(NixError::MissingField {
+                record: 1,
+                field: "storePaths",
+            });
+        }
+        let installable = format!("{original_url}#{}.outPath", package.attr);
+        Ok(self.plan(["eval", "--json", "--refresh", &installable]))
+    }
     pub fn search_plan(&self, q: &str) -> Result<CommandPlan, NixError> {
         if q.trim().len() < 2 {
             return Err(NixError::InvalidSelector);

@@ -217,6 +217,7 @@ impl CapabilitySet {
     pub const UPGRADE: Self = Self(1 << 7);
     pub const DOWNGRADE: Self = Self(1 << 8);
     pub const SYSTEM_UPGRADE: Self = Self(1 << 9);
+    pub const REFRESH_CATALOG: Self = Self(1 << 10);
 
     pub const fn empty() -> Self {
         Self(0)
@@ -270,7 +271,8 @@ pub type ReadRequest = ReadOperation;
 impl ReadOperation {
     pub const fn capability(&self) -> CapabilitySet {
         match self {
-            Self::Catalog | Self::RefreshCatalog => CapabilitySet::CATALOG,
+            Self::Catalog => CapabilitySet::CATALOG,
+            Self::RefreshCatalog => CapabilitySet::REFRESH_CATALOG,
             Self::Search { .. } => CapabilitySet::SEARCH,
             Self::Installed => CapabilitySet::INSTALLED,
             Self::Details { .. } => CapabilitySet::DETAILS,
@@ -844,23 +846,26 @@ impl PackageBackend for BuiltinBackend {
             .union(CapabilitySet::INSTALL)
             .union(CapabilitySet::REMOVE)
             .union(CapabilitySet::SYSTEM_UPGRADE);
+        let refresh = read.union(CapabilitySet::REFRESH_CATALOG);
         match self.0 {
-            BackendId::Flatpak | BackendId::Brew => write,
+            BackendId::Flatpak => write.union(CapabilitySet::REFRESH_CATALOG),
+            BackendId::Brew | BackendId::Nix => write,
             BackendId::Snap => write.union(CapabilitySet::SYSTEM_UPGRADE),
-            BackendId::Nix => CapabilitySet::CATALOG
-                .union(CapabilitySet::SEARCH)
-                .union(CapabilitySet::INSTALLED)
-                .union(CapabilitySet::DETAILS)
-                .union(CapabilitySet::INSTALL)
-                .union(CapabilitySet::REMOVE)
-                .union(CapabilitySet::UPGRADE),
             BackendId::Pacman | BackendId::Paru | BackendId::Yay => write
                 .union(CapabilitySet::DOWNGRADE)
                 .union(CapabilitySet::SYSTEM_UPGRADE),
-            BackendId::Apt => write.union(CapabilitySet::SYSTEM_UPGRADE),
+            BackendId::Apt => write
+                .union(CapabilitySet::SYSTEM_UPGRADE)
+                .union(CapabilitySet::REFRESH_CATALOG),
             BackendId::Dnf5 | BackendId::Dnf4 => write.union(CapabilitySet::SYSTEM_UPGRADE),
-            BackendId::Zypper => write.union(CapabilitySet::SYSTEM_UPGRADE),
-            BackendId::Apk | BackendId::Xbps => install_remove_system_upgrade,
+            BackendId::Zypper => refresh
+                .union(CapabilitySet::INSTALL)
+                .union(CapabilitySet::REMOVE)
+                .union(CapabilitySet::UPGRADE)
+                .union(CapabilitySet::SYSTEM_UPGRADE),
+            BackendId::Apk | BackendId::Xbps => {
+                install_remove_system_upgrade.union(CapabilitySet::REFRESH_CATALOG)
+            }
         }
     }
 
@@ -1246,9 +1251,13 @@ fn read_dnf(
     })?;
     let b = DnfBackend::from_paths(generation, b.program);
     let (plan, parser) = match &operation {
-        ReadOperation::Catalog | ReadOperation::Search { .. } | ReadOperation::RefreshCatalog => {
-            (b.list_plan(), false)
+        ReadOperation::RefreshCatalog => {
+            return Err(BackendError::UnsupportedCapability {
+                backend,
+                capability: CapabilitySet::REFRESH_CATALOG,
+            });
         }
+        ReadOperation::Catalog | ReadOperation::Search { .. } => (b.list_plan(), false),
         ReadOperation::Installed => (b.installed_plan(), true),
         ReadOperation::Updates => (b.updates_plan(), false),
         ReadOperation::Details { package, .. } => (
@@ -1402,9 +1411,10 @@ fn read_brew(
             }
         })?;
     let plan = match &operation {
-        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
-            provider.formulae_plan()
-        }
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog => provider.formulae_plan(),
+        ReadOperation::Search { query } => provider
+            .search_plan(query)
+            .map_err(|error| optional_read_error(backend, error))?,
         ReadOperation::Installed => {
             let mut plan = provider.formulae_plan();
             plan.args = ["info", "--json=v2", "--installed", "--formula"]
@@ -1428,14 +1438,9 @@ fn read_brew(
     }
     let packages = match &operation {
         ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
-            let query = match &operation {
-                ReadOperation::Search { query } => Some(query.as_str()),
-                _ => None,
-            };
             output
                 .stdout
                 .split_whitespace()
-                .filter(|token| query.is_none_or(|q| token.contains(q)))
                 .map(|token| {
                     identity_for(
                         backend,
@@ -1494,7 +1499,7 @@ fn read_nix(
         ReadOperation::Search { query } => provider
             .search_plan(query)
             .map_err(|error| optional_read_error(backend, error))?,
-        ReadOperation::Installed => provider.profile_list_plan(),
+        ReadOperation::Installed | ReadOperation::Updates => provider.profile_list_plan(),
         ReadOperation::Details { package, scope } => {
             if *scope != PackageScope::Profile {
                 return Err(optional_read_error(backend, "nix requires profile scope"));
@@ -1502,12 +1507,6 @@ fn read_nix(
             provider
                 .details_plan(package.as_str())
                 .map_err(|error| optional_read_error(backend, error))?
-        }
-        ReadOperation::Updates => {
-            return Err(BackendError::UnsupportedCapability {
-                backend,
-                capability: CapabilitySet::UPDATES,
-            });
         }
     };
     let output = provider
@@ -1521,6 +1520,35 @@ fn read_nix(
         _ => parse_profile(&output.stdout),
     }
     .map_err(|error| optional_read_error(backend, error))?;
+    let records = if matches!(operation, ReadOperation::Updates) {
+        let mut updates = Vec::new();
+        for record in records.into_iter().filter(|record| record.active) {
+            let plan = provider
+                .update_candidate_plan(&record)
+                .map_err(|error| optional_read_error(backend, error))?;
+            let candidate = provider
+                .execute(&plan)
+                .map_err(|error| optional_read_error(backend, error))?;
+            if !candidate.status.success() {
+                return Err(command_failed(
+                    backend,
+                    "check update candidate",
+                    &candidate,
+                ));
+            }
+            let store_path: String = serde_json::from_str(&candidate.stdout)
+                .map_err(|error| optional_read_error(backend, error))?;
+            if !store_path.starts_with("/nix/store/") {
+                return Err(optional_read_error(backend, "invalid candidate store path"));
+            }
+            if !record.store_paths.contains(&store_path) {
+                updates.push(record);
+            }
+        }
+        updates
+    } else {
+        records
+    };
     let packages = records
         .iter()
         .filter(|record| match &operation {
@@ -1544,6 +1572,12 @@ fn read_zypper(
     let backend = BackendId::Zypper;
     let provider = ZypperBackend::from_path(std::env::var_os("PATH").as_deref())
         .map_err(|e| optional_read_error(backend, e))?;
+    if matches!(operation, ReadOperation::RefreshCatalog) {
+        let output = execute_plan(&provider.refresh_plan(), backend, "refresh package catalog")?;
+        if !output.status.success() {
+            return Err(command_failed(backend, "refresh package catalog", &output));
+        }
+    }
     let (plan, details) = match &operation {
         ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
         ReadOperation::Search { query } => (provider.search_plan(query), false),
@@ -1591,6 +1625,16 @@ fn read_apk(
     let backend = BackendId::Apk;
     let provider = ApkBackend::from_path(std::env::var_os("PATH").as_deref())
         .map_err(|e| optional_read_error(backend, e))?;
+    if matches!(operation, ReadOperation::RefreshCatalog) {
+        let output = execute_plan(
+            &provider.update_catalog_plan(),
+            backend,
+            "refresh package catalog",
+        )?;
+        if !output.status.success() {
+            return Err(command_failed(backend, "refresh package catalog", &output));
+        }
+    }
     let (plan, details) = match &operation {
         ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
         ReadOperation::Search { query } => (provider.search_plan(query), false),
@@ -1630,6 +1674,12 @@ fn read_xbps(
     let backend = BackendId::Xbps;
     let provider = XbpsBackend::from_path(std::env::var_os("PATH").as_deref())
         .map_err(|e| optional_read_error(backend, e))?;
+    if matches!(operation, ReadOperation::RefreshCatalog) {
+        let output = execute_plan(&provider.sync_plan(), backend, "refresh package catalog")?;
+        if !output.status.success() {
+            return Err(command_failed(backend, "refresh package catalog", &output));
+        }
+    }
     let (plan, details) = match &operation {
         ReadOperation::Catalog | ReadOperation::RefreshCatalog => (provider.list_plan(), false),
         ReadOperation::Search { query } => (provider.search_plan(query), false),
@@ -2274,6 +2324,102 @@ mod tests {
     }
 
     #[test]
+    fn refresh_catalog_has_provider_specific_capability_contract() {
+        assert_eq!(
+            ReadOperation::RefreshCatalog.capability(),
+            CapabilitySet::REFRESH_CATALOG
+        );
+        for backend in [
+            BackendId::Apt,
+            BackendId::Zypper,
+            BackendId::Apk,
+            BackendId::Xbps,
+        ] {
+            assert!(
+                BuiltinBackend::new(backend)
+                    .capabilities()
+                    .contains(CapabilitySet::REFRESH_CATALOG)
+            );
+        }
+        for backend in [BackendId::Dnf4, BackendId::Dnf5] {
+            assert_eq!(
+                BuiltinBackend::new(backend).read(ReadOperation::RefreshCatalog),
+                Err(BackendError::UnsupportedCapability {
+                    backend,
+                    capability: CapabilitySet::REFRESH_CATALOG,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn native_refresh_catalog_runs_provider_refresh_before_listing() {
+        if let Ok(backend) = std::env::var("NATIVE_REFRESH_BACKEND") {
+            let backend = match backend.as_str() {
+                "zypper" => BackendId::Zypper,
+                "apk" => BackendId::Apk,
+                "xbps" => BackendId::Xbps,
+                _ => panic!("unknown backend"),
+            };
+            let result = BuiltinBackend::new(backend)
+                .read(ReadOperation::RefreshCatalog)
+                .expect("refresh and list commands succeed");
+            assert_eq!(result.packages.len(), 1);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("system-tools-core-refresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let zypper = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\nif [ \"$1\" = refresh ]; then exit 0; fi\nprintf '%s' '{}'\n",
+            include_str!("../../../tests/package-managers/fixtures/zypper/search.xml")
+        );
+        let apk = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\nif [ \"$1\" = update ]; then exit 0; fi\nprintf 'libfoo-bar\\t2:1.4.0-r3\\tx86_64\\talpine-main\\n'\n";
+        let xbps_query = "#!/bin/sh\nprintf 'query %s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\nprintf 'lib-foo-1.2_2\\trepo-main\\tx86_64\\n'\n";
+        let xbps_install = "#!/bin/sh\nprintf 'install %s\\n' \"$*\" >> \"$NATIVE_REFRESH_LOG\"\n[ \"$1\" = -S ]\n";
+        let xbps_remove = "#!/bin/sh\nexit 0\n";
+        for (name, body) in [
+            ("zypper", zypper.as_str()),
+            ("apk", apk),
+            ("xbps-query", xbps_query),
+            ("xbps-install", xbps_install),
+            ("xbps-remove", xbps_remove),
+        ] {
+            let path = directory.join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for (backend, expected) in [
+            ("zypper", vec!["refresh", "--xmlout search -s -t package"]),
+            ("apk", vec!["update", "search --no-cache *"]),
+            ("xbps", vec!["install -S", "query -Rs ."]),
+        ] {
+            let log = directory.join(format!("{backend}.log"));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "backend::tests::native_refresh_catalog_runs_provider_refresh_before_listing",
+                    "--nocapture",
+                ])
+                .env("NATIVE_REFRESH_BACKEND", backend)
+                .env("NATIVE_REFRESH_LOG", &log)
+                .env("PATH", &directory)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{backend}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let actual = std::fs::read_to_string(log).unwrap();
+            assert_eq!(actual.lines().collect::<Vec<_>>(), expected);
+        }
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn flatpak_catalog_is_enumerated_and_unsupported_write_fails_before_execution() {
         let flatpak = BuiltinBackend::new(BackendId::Flatpak);
         let catalog = flatpak
@@ -2505,10 +2651,7 @@ mod tests {
                 result.packages[0].native_key.as_str(),
                 "nixpkgs#legacyPackages.x86_64-linux.hello"
             );
-            assert!(matches!(
-                nix.updates(),
-                Err(BackendError::UnsupportedCapability { .. })
-            ));
+            assert!(nix.capabilities().contains(CapabilitySet::UPDATES));
             assert!(matches!(
                 nix.catalog(),
                 Err(BackendError::QueryRequired { .. })
