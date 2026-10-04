@@ -1,7 +1,7 @@
 use system_tools_core::PackageSource;
 
 pub(crate) fn source_color(source: PackageSource) -> &'static str {
-    source.color_code()
+    source.source_color()
 }
 
 pub(crate) fn strip_ansi(value: &str) -> String {

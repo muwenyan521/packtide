@@ -5,6 +5,7 @@ use system_tools_core::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::source_metadata::{PackageRoute, package_route};
 use crate::sources::valid_package_name;
 
 use super::{parse_package_identity, parse_package_row};
@@ -30,15 +31,12 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     let source = parsed.as_ref().map(|row| row.source);
     let parsed_identity = parse_package_identity(raw_row)
         .ok_or_else(|| anyhow::anyhow!("invalid package identity in preview row"))?;
-    let backend_id = match parsed_identity.backend {
-        BackendId::Pacman if matches!(kind, "install" | "downgrade") => {
-            if crate::app::package_helper().unwrap_or("paru") == "yay" {
-                BackendId::Yay
-            } else {
-                BackendId::Paru
-            }
-        }
-        backend => backend,
+    let backend_id = if package_route(parsed_identity.backend) == PackageRoute::ArchRepository
+        && matches!(kind, "install" | "downgrade")
+    {
+        crate::source_metadata::aur_backend(crate::app::package_helper().unwrap_or("paru"))
+    } else {
+        parsed_identity.backend
     };
     let identity_key = if matches!(kind, "remove" | "downgrade")
         && parsed_identity.backend != BackendId::Flatpak

@@ -60,7 +60,7 @@ pub(crate) fn text(lang: Lang, key: &str, replacements: &[(&str, &str)]) -> Stri
 }
 
 pub(crate) fn source_label(lang: Lang, source: system_tools_core::PackageSource) -> String {
-    text(lang, source.label_key(), &[])
+    text(lang, source.source_label(), &[])
 }
 
 pub(crate) fn backend_label(lang: Lang, backend: system_tools_core::BackendId) -> String {

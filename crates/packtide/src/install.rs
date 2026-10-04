@@ -3,6 +3,7 @@ use std::env;
 use std::time::{Instant, SystemTime};
 use system_tools_core::TransactionAction;
 
+use crate::source_metadata::{PackageRoute, package_route};
 use crate::sources::install_rows;
 use crate::transaction::execute_package;
 use crate::ui::{parse_package_identity, parse_package_row, write_install_catalog};
@@ -88,11 +89,11 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             );
         };
-        match identity.backend {
-            system_tools_core::BackendId::Paru | system_tools_core::BackendId::Yay => {
+        match package_route(identity.backend) {
+            PackageRoute::ArchForeign => {
                 aur.push(identity.native_key.as_str().to_owned());
             }
-            system_tools_core::BackendId::Pacman => {
+            PackageRoute::ArchRepository => {
                 let Some(repository) = package.repository else {
                     bail!(
                         "{}: install selection is missing its pacman repository",
@@ -106,11 +107,11 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
                     format!("{repository}/{name}")
                 });
             }
-            system_tools_core::BackendId::Flatpak => bail!(
+            PackageRoute::Flatpak => bail!(
                 "{}: Flatpak rows are not valid in the package installer",
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             ),
-            _ => bail!(
+            PackageRoute::Other => bail!(
                 "{}: this package source is not available in the current picker",
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             ),

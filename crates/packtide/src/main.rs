@@ -10,6 +10,7 @@ mod locale;
 mod mirror_update;
 mod model;
 mod remove;
+mod source_metadata;
 mod sources;
 #[cfg(test)]
 mod tests;

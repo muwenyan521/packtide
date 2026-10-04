@@ -35,13 +35,7 @@ impl PackageRecord {
         installed: bool,
     ) -> Self {
         let backend = source.backend_for_source();
-        let scope = if source == PackageSource::Flatpak
-            && repository.as_deref() == Some("flatpak@system")
-        {
-            PackageScope::System
-        } else {
-            source.default_scope()
-        };
+        let scope = crate::source_metadata::legacy_scope(source, repository.as_deref());
         let native_key = NativePackageKey::new(name.clone()).expect("legacy package name");
         let (origin, display_name) = match &listing {
             PackageListing::Flatpak { app_name, origin } => (
@@ -52,7 +46,7 @@ impl PackageRecord {
         };
         Self {
             backend,
-            kind: backend.default_kind(),
+            kind: source.default_kind(),
             scope,
             native_key,
             origin,

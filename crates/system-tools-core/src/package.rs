@@ -46,6 +46,10 @@ impl PackageSource {
         }
     }
 
+    pub const fn source_key(self) -> &'static str {
+        self.as_str()
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "pacman" => Some(Self::Pacman),
@@ -83,6 +87,10 @@ impl PackageSource {
         self.backend_for_source().default_scope()
     }
 
+    pub const fn default_kind(self) -> PackageKind {
+        self.backend_for_source().default_kind()
+    }
+
     pub const fn hidden_prefix(self) -> &'static str {
         match self {
             Self::Pacman | Self::Aur => "PKG",
@@ -114,6 +122,10 @@ impl PackageSource {
         }
     }
 
+    pub const fn source_label(self) -> &'static str {
+        self.label_key()
+    }
+
     pub const fn color_code(self) -> &'static str {
         match self {
             Self::Pacman => "34",
@@ -130,8 +142,25 @@ impl PackageSource {
         }
     }
 
+    pub const fn source_color(self) -> &'static str {
+        self.color_code()
+    }
+
     pub fn hidden_token(self, detail: &str) -> String {
         format!("{}:{}", self.hidden_prefix(), detail)
+    }
+
+    pub fn parse_hidden_token(token: &str) -> Option<(Self, &str)> {
+        let (prefix, detail) = token.split_once(':')?;
+        // AUR shares Pacman's prefix; only the reserved aur detail selects it.
+        let source = if prefix == Self::Aur.hidden_prefix() && detail == Self::Aur.as_str() {
+            Self::Aur
+        } else {
+            Self::ALL
+                .into_iter()
+                .find(|source| *source != Self::Aur && source.hidden_prefix() == prefix)?
+        };
+        Some((source, detail))
     }
 }
 
@@ -201,6 +230,10 @@ impl BackendId {
             | Self::Apk
             | Self::Xbps => PackageKind::System,
         }
+    }
+
+    pub fn supports_kind(self, kind: PackageKind) -> bool {
+        kind == self.default_kind() || (self == Self::Brew && kind == PackageKind::BrewCask)
     }
 }
 
@@ -313,8 +346,11 @@ mod tests {
                 source.default_scope(),
                 source.backend_for_source().default_scope()
             );
-            assert!(!source.label_key().is_empty());
-            assert!(!source.color_code().is_empty());
+            assert_eq!(source.source_key(), source.as_str());
+            assert_eq!(source.source_label(), source.label_key());
+            assert_eq!(source.source_color(), source.color_code());
+            assert!(!source.source_label().is_empty());
+            assert!(!source.source_color().is_empty());
             assert!(!source.hidden_prefix().is_empty());
         }
         assert_eq!(PackageSource::Dnf.backend_for_source(), BackendId::Dnf5);
@@ -322,5 +358,45 @@ mod tests {
         assert_eq!(PackageSource::Aur.backend_for_source(), BackendId::Paru);
         assert_eq!(BackendId::Yay.package_source(), PackageSource::Aur);
         assert_eq!(PackageSource::Snap.default_scope(), PackageScope::System);
+    }
+
+    #[test]
+    fn hidden_tokens_restore_source_and_detail_for_every_source() {
+        for source in PackageSource::ALL {
+            let detail = source.as_str();
+            let token = source.hidden_token(detail);
+
+            let parsed = PackageSource::parse_hidden_token(&token);
+
+            assert_eq!(parsed, Some((source, detail)));
+        }
+    }
+
+    #[test]
+    fn hidden_token_parser_disambiguates_shared_prefix_and_rejects_unknown_prefix() {
+        let tokens = [
+            ("PKG:aur", Some((PackageSource::Aur, "aur"))),
+            ("PKG:core", Some((PackageSource::Pacman, "core"))),
+            ("APT:aur", Some((PackageSource::Apt, "aur"))),
+            ("FLTK:flathub", Some((PackageSource::Flatpak, "flathub"))),
+            ("UNKNOWN:core", None),
+            ("core", None),
+        ];
+
+        let parsed = tokens.map(|(token, _)| PackageSource::parse_hidden_token(token));
+
+        assert_eq!(parsed, tokens.map(|(_, expected)| expected));
+    }
+
+    #[test]
+    fn backend_kind_compatibility_accepts_cask_only_for_brew() {
+        let kinds = BackendId::ALL.map(|backend| (backend, PackageKind::BrewCask));
+
+        let supported = kinds.map(|(backend, kind)| backend.supports_kind(kind));
+
+        assert_eq!(
+            supported,
+            BackendId::ALL.map(|backend| backend == BackendId::Brew)
+        );
     }
 }

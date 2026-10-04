@@ -1,5 +1,6 @@
 use super::strip_ansi;
 use crate::model::{PackageListing, PackageRecord};
+use crate::source_metadata;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use system_tools_core::{
@@ -127,7 +128,7 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
         String::new()
     };
     let internal = hidden_source_token(record);
-    let source = source_label(record);
+    let source = source_metadata::record_label(record);
     let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source.as_str()));
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
     if mode == PackageListMode::Install {
@@ -163,46 +164,13 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
     output.write_all(installed.as_bytes())
 }
 
-fn source_label(record: &PackageRecord) -> String {
-    if let Some(repository) = record.repository.as_deref() {
-        if repository == "flatpak@system" {
-            "flatpak@system".to_owned()
-        } else {
-            repository.to_owned()
-        }
-    } else {
-        crate::locale::source_label(crate::locale::current(), record.source)
-    }
-}
-
 fn hidden_source_token(record: &PackageRecord) -> String {
-    let base = match record.source {
-        PackageSource::Flatpak if record.repository.as_deref() == Some("flatpak@system") => {
-            "FLTK:flatpak@system".to_owned()
-        }
-        PackageSource::Flatpak => match &record.listing {
-            PackageListing::Flatpak { origin, .. } if !origin.is_empty() => {
-                format!("FLTK:{origin}")
-            }
-            _ => "FLTK:flatpak".to_owned(),
-        },
-        PackageSource::Aur => "PKG:aur".to_owned(),
-        PackageSource::Pacman => {
-            format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
-        }
-        source => source.hidden_token(record.repository.as_deref().unwrap_or(source.as_str())),
-    };
+    let base = source_metadata::hidden_token(record);
     let identity = record.identity();
     let simple_identity = identity.backend == record.source.backend_for_source()
-        && identity.kind == identity.backend.default_kind()
+        && identity.kind == record.source.default_kind()
         && identity.scope
-            == if record.source == PackageSource::Flatpak
-                && record.repository.as_deref() == Some("flatpak@system")
-            {
-                PackageScope::System
-            } else {
-                record.source.default_scope()
-            }
+            == source_metadata::legacy_scope(record.source, record.repository.as_deref())
         && identity.native_key.as_str() == record.name
         && identity.origin.is_none()
         && identity.display_name.is_none();
@@ -273,84 +241,22 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     let token_source_label = source_label
         .split_once('|')
         .map_or(source_label, |(head, _)| head);
-    let (source_label, scope) = if hidden {
-        match token_source_label.strip_prefix("FLTK:") {
-            Some(origin) => (
-                "flatpak",
-                if origin == "flatpak@system" {
-                    "system"
-                } else {
-                    "user"
-                },
-            ),
-            None => {
-                let source = token_source_label
-                    .split_once(':')
-                    .map(|(_, value)| value)
-                    .unwrap_or(source_label);
-                (source, "user")
-            }
-        }
-    } else {
-        source_label
-            .split_once('@')
-            .unwrap_or((source_label, "user"))
-    };
-    if hidden && source_label == "aur" {
-        return Some(PackageRow {
-            source: PackageSource::Aur,
-            repository: Some("aur".to_owned()),
-            name: name.to_owned(),
-        });
-    }
-    if hidden && let Some((prefix, repository)) = token_source_label.split_once(':') {
-        let source = match prefix {
-            "FLTK" => PackageSource::Flatpak,
-            "PKG" if repository == "aur" => PackageSource::Aur,
-            "PKG" => PackageSource::Pacman,
-            "APT" => PackageSource::Apt,
-            "DNF" => PackageSource::Dnf,
-            "ZYPPER" => PackageSource::Zypper,
-            "APK" => PackageSource::Apk,
-            "XBPS" => PackageSource::Xbps,
-            "SNAP" => PackageSource::Snap,
-            "BREW" => PackageSource::Brew,
-            "NIX" => PackageSource::Nix,
-            _ => return None,
-        };
+    if hidden {
+        let (source, detail) = PackageSource::parse_hidden_token(token_source_label)?;
         return Some(PackageRow {
             source,
-            repository: if source == PackageSource::Flatpak && repository == "flatpak@system" {
-                Some("flatpak@system".to_owned())
-            } else if source == PackageSource::Flatpak {
-                None
-            } else {
-                Some(repository.to_owned())
-            },
+            repository: source_metadata::hidden_repository(source, detail),
             name: name.to_owned(),
         });
     }
-    if hidden && source_label != "flatpak" {
-        return Some(PackageRow {
-            source: PackageSource::Pacman,
-            repository: Some(source_label.to_owned()),
-            name: name.to_owned(),
-        });
-    }
-    let (source, repository) = match PackageSource::parse(source_label).or_else(|| {
-        PackageSource::ALL.into_iter().find(|source| {
-            crate::locale::source_label(crate::locale::Lang::En, *source) == source_label
-                || crate::locale::source_label(crate::locale::Lang::Zh, *source) == source_label
-        })
-    }) {
+    let (source_label, scope) = source_label
+        .split_once('@')
+        .unwrap_or((source_label, "user"));
+    let (source, repository) = match source_metadata::parse_label(source_label) {
         Some(source) => (
             source,
             (source == PackageSource::Flatpak && scope == "system")
                 .then(|| "flatpak@system".to_owned()),
-        ),
-        None if source_label == "flatpak" => (
-            PackageSource::Flatpak,
-            (scope == "system").then(|| "flatpak@system".to_owned()),
         ),
         None if crate::sources::valid_package_name(source_label) => {
             (PackageSource::Pacman, Some(source_label.to_owned()))
@@ -371,13 +277,7 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
     let token = clean.split('\t').next()?.trim();
     if !token.contains(':') {
         let backend = parsed.source.backend_for_source();
-        let scope = if parsed.source == PackageSource::Flatpak
-            && parsed.repository.as_deref() == Some("flatpak@system")
-        {
-            PackageScope::System
-        } else {
-            parsed.source.default_scope()
-        };
+        let scope = source_metadata::legacy_scope(parsed.source, parsed.repository.as_deref());
         let key = if parsed.source == PackageSource::Pacman || parsed.source == PackageSource::Aur {
             parsed.name.clone()
         } else {
@@ -388,39 +288,18 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
         };
         return Some(PackageIdentity::new(
             backend,
-            backend.default_kind(),
+            parsed.source.default_kind(),
             scope,
             NativePackageKey::new(key).ok()?,
         ));
     }
     let token = token.split_once('|').map_or(token, |(head, _)| head);
-    let (prefix, detail) = token.split_once(':')?;
-    let mut backend = match prefix {
-        "PKG" if detail == "aur" => BackendId::Paru,
-        "PKG" => BackendId::Pacman,
-        "FLTK" => BackendId::Flatpak,
-        "APT" => BackendId::Apt,
-        "DNF" => BackendId::Dnf5,
-        "ZYPPER" => BackendId::Zypper,
-        "APK" => BackendId::Apk,
-        "XBPS" => BackendId::Xbps,
-        "SNAP" => BackendId::Snap,
-        "BREW" => BackendId::Brew,
-        "NIX" => BackendId::Nix,
-        _ => return None,
-    };
-    let mut scope = if prefix == "FLTK" && detail == "flatpak@system" {
-        PackageScope::System
-    } else {
-        backend.default_scope()
-    };
-    let mut kind = backend.default_kind();
+    let (source, detail) = PackageSource::parse_hidden_token(token)?;
+    let mut backend = source.backend_for_source();
+    let mut scope = source_metadata::legacy_scope(source, parsed.repository.as_deref());
+    let mut kind = source.default_kind();
     let mut native_key = NativePackageKey::new(parsed.name.clone()).ok()?;
-    let mut origin = if prefix == "FLTK" && detail != "flatpak" && detail != "flatpak@system" {
-        Some(detail.to_owned())
-    } else {
-        None
-    };
+    let mut origin = source_metadata::hidden_origin(source, detail);
     let mut display_name = None;
     let raw_token = clean.split('\t').next()?.trim();
     let attributes = raw_token
@@ -442,26 +321,7 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
             _ => return None,
         }
     }
-    let valid_kind = match backend {
-        BackendId::Brew => matches!(kind, PackageKind::BrewFormula | PackageKind::BrewCask),
-        BackendId::Pacman
-        | BackendId::Apt
-        | BackendId::Dnf5
-        | BackendId::Dnf4
-        | BackendId::Zypper
-        | BackendId::Apk
-        | BackendId::Xbps
-        | BackendId::Paru
-        | BackendId::Yay
-        | BackendId::Flatpak
-        | BackendId::Snap
-        | BackendId::Nix => kind == backend.default_kind(),
-    };
-    if backend.package_source() != parsed.source
-        || !valid_kind
-        || (parsed.source == PackageSource::Aur
-            && !matches!(backend, BackendId::Paru | BackendId::Yay))
-    {
+    if backend.package_source() != parsed.source || !backend.supports_kind(kind) {
         return None;
     }
     let mut identity = PackageIdentity::new(backend, kind, scope, native_key);
@@ -573,6 +433,33 @@ mod tests {
                 name: "bash".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn legacy_flatpak_tokens_keep_scope_and_remote_when_restoring_identity() {
+        let cases = [
+            ("FLTK:flatpak", PackageScope::User, None),
+            ("FLTK:flathub", PackageScope::User, Some("flathub")),
+            ("FLTK:flatpak@system", PackageScope::System, None),
+        ];
+
+        let identities = cases.map(|(token, _, _)| {
+            parse_package_identity(&format!("{token}\tFlatpak\torg.example.App\tDemo"))
+        });
+
+        for (identity, (_, scope, origin)) in identities.into_iter().zip(cases) {
+            assert_eq!(
+                identity,
+                Some(PackageIdentity {
+                    backend: BackendId::Flatpak,
+                    kind: PackageKind::Flatpak,
+                    scope,
+                    native_key: NativePackageKey::new("org.example.App").unwrap(),
+                    origin: origin.map(str::to_owned),
+                    display_name: None,
+                })
+            );
+        }
     }
 
     #[test]

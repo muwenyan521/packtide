@@ -7,6 +7,7 @@ use system_tools_core::{
 };
 
 use crate::model::{PackageListing, PackageRecord};
+use crate::source_metadata::{PackageRoute, package_route};
 use crate::transaction::{execute_flatpak, execute_native, execute_package_typed};
 use crate::ui::parse_package_identity;
 use crate::ui::{PackageListMode, parse_package_row, render_package_rows, select_rows};
@@ -85,31 +86,22 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             );
         };
-        if matches!(identity.backend, BackendId::Paru | BackendId::Yay)
+        if package_route(identity.backend) == PackageRoute::ArchForeign
             && let Some(helper) = helper
-            && identity.backend
-                != if helper == "yay" {
-                    BackendId::Yay
-                } else {
-                    BackendId::Paru
-                }
+            && identity.backend != crate::source_metadata::aur_backend(helper)
         {
-            identity = identity_with_backend(
-                &identity,
-                if helper == "yay" {
-                    BackendId::Yay
-                } else {
-                    BackendId::Paru
-                },
-            );
+            identity =
+                identity_with_backend(&identity, crate::source_metadata::aur_backend(helper));
         }
-        match identity.backend {
-            BackendId::Flatpak => match identity.scope {
+        match package_route(identity.backend) {
+            PackageRoute::Flatpak => match identity.scope {
                 PackageScope::System => flatpak_system.push(identity),
                 PackageScope::User | PackageScope::Profile => flatpak_user.push(identity),
             },
-            BackendId::Pacman | BackendId::Paru | BackendId::Yay => package_ids.push(identity),
-            backend => push_native_group(&mut native_groups, backend, identity),
+            PackageRoute::ArchRepository | PackageRoute::ArchForeign => package_ids.push(identity),
+            PackageRoute::Other => {
+                push_native_group(&mut native_groups, identity.backend, identity)
+            }
         }
     }
     if !package_ids.is_empty()
@@ -206,11 +198,7 @@ fn rows(
         .ok_or_else(|| anyhow::anyhow!("backend pacman is not registered"))?
         .read(ReadOperation::Installed)
         .map_err(|error| anyhow::anyhow!("pacman typed installed read failed: {error}"))?;
-    let foreign = if helper == "yay" {
-        BackendId::Yay
-    } else {
-        BackendId::Paru
-    };
+    let foreign = crate::source_metadata::aur_backend(helper);
     let foreign_installed = registry
         .backend(foreign)
         .ok_or_else(|| anyhow::anyhow!("backend {} is not registered", foreign.as_str()))?
