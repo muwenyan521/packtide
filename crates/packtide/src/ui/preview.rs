@@ -54,9 +54,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     } else {
         backend_id.default_kind()
     };
-    let identity_scope = if matches!(kind, "remove") {
-        parsed_identity.scope
-    } else if backend_id == parsed_identity.backend {
+    let identity_scope = if matches!(kind, "remove") || backend_id == parsed_identity.backend {
         parsed_identity.scope
     } else {
         backend_id.default_scope()

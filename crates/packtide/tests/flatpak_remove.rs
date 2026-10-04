@@ -928,7 +928,7 @@ fn install_missing_pacman_names_the_affected_lookup() {
     assert_missing_required_command_after_stubs(
         "install",
         "pacman",
-        "the package catalog lookup",
+        "capability.install",
         &["fzf"],
     );
 }

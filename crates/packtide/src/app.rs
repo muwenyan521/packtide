@@ -50,14 +50,27 @@ pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
     let native = detect_native_backend_from_file("/etc/os-release").map_err(|error| {
         anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
     })?;
-    Ok(match native {
+    let backend = match native {
         NativeBackend::Pacman => BackendId::Pacman,
         NativeBackend::Apt => BackendId::Apt,
         NativeBackend::Dnf => BackendId::Dnf5,
         NativeBackend::Zypper => BackendId::Zypper,
         NativeBackend::Apk => BackendId::Apk,
         NativeBackend::Xbps => BackendId::Xbps,
-    })
+    };
+    let command = match backend {
+        BackendId::Dnf5 | BackendId::Dnf4 => "dnf",
+        other => other.as_str(),
+    };
+    if ExecutableResolver::from_path(env::var_os("PATH").as_deref())
+        .resolve(OsStr::new(command))
+        .is_none()
+    {
+        anyhow::bail!(
+            "required command '{command}' is unavailable for {capability}; install it and retry"
+        );
+    }
+    Ok(backend)
 }
 
 pub(crate) fn require_command_for(
