@@ -50,6 +50,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
         .into_iter()
         .chain(query_native_updates())
         .chain(query_flatpak_updates())
+        .chain(query_optional_updates())
         .collect::<Vec<_>>();
     let updates = deduplicate_updates(updates);
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
@@ -340,6 +341,37 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
         .unwrap_or_default();
     debug_source_timing("flatpak_updates", started);
     updates
+}
+
+fn query_optional_updates() -> Vec<PackageUpdate> {
+    let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
+    let registry = BackendRegistry::default();
+    [
+        (BackendId::Snap, PackageSource::Snap, "snap"),
+        (BackendId::Brew, PackageSource::Brew, "brew"),
+        (BackendId::Nix, PackageSource::Nix, "nix"),
+    ]
+    .into_iter()
+    .filter_map(|(backend, source, command)| {
+        let started = Instant::now();
+        resolver.resolve(std::ffi::OsStr::new(command))?;
+        let provider = registry.backend(backend)?;
+        let result = provider.read(ReadOperation::Updates).ok()?;
+        debug_source_timing(source.as_str(), started);
+        Some(
+            result
+                .packages
+                .into_iter()
+                .map(move |package| PackageUpdate {
+                    source,
+                    name: package.native_key.as_str().to_owned(),
+                    version: None,
+                    display: package.native_key.as_str().to_owned(),
+                }),
+        )
+    })
+    .flatten()
+    .collect()
 }
 
 #[cfg(test)]
