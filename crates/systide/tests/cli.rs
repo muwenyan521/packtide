@@ -6,6 +6,47 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Fixture(PathBuf);
 
+#[test]
+fn optional_update_list_preserves_providers_and_reports_failures() {
+    let fixture = Fixture::new();
+    fixture.write_executable(
+        "snap",
+        "#!/bin/sh\nprintf 'Name Version Rev Publisher Notes\\nhello-world 2 2 acme -\\n'\n",
+    );
+    fixture.write_executable("brew", "#!/bin/sh\nprintf '%s\\n' '{\"formulae\":[{\"name\":\"hello-world\",\"installed_versions\":[\"1\"],\"latest_version\":\"2\"}]}'\n");
+    fixture.write_executable("nix", "#!/bin/sh\ncase \"$*\" in\n *profile*) printf '%s\\n' '{\"elements\":{\"hello-world\":{\"attrPath\":\"hello\",\"originalUrl\":\"flake:nixpkgs\",\"storePaths\":[\"/nix/store/old-hello\"],\"active\":true}}}' ;;\n *) printf '%s\\n' '\"/nix/store/new-hello\"' ;;\nesac\n");
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_systide"))
+            .arg("--list-data")
+            .env("PATH", fixture.path())
+            .output()
+            .expect("run list-data")
+    };
+    let output = invoke();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows = String::from_utf8_lossy(&output.stdout);
+    for source in ["[snap]", "[brew]", "[nix]"] {
+        assert!(rows.contains(source), "missing {source}: {rows}");
+    }
+    assert!(rows.contains("hello-world 1 -> 2"));
+    fixture.write_executable(
+        "snap",
+        "#!/bin/sh\nprintf 'snap service unavailable\\n' >&2\nexit 1\n",
+    );
+    let failed_provider = invoke();
+    assert!(failed_provider.status.success());
+    assert!(String::from_utf8_lossy(&failed_provider.stderr).contains("update diagnostics: snap:"));
+    assert!(String::from_utf8_lossy(&failed_provider.stdout).contains("[brew]"));
+    println!(
+        "PROVIDER ROWS:\n{rows}\nFAILURE DIAGNOSTICS:\n{}",
+        String::from_utf8_lossy(&failed_provider.stderr)
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let nonce = SystemTime::now()

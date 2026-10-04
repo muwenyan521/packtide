@@ -161,6 +161,14 @@ pub fn parse_outdated(input: &str) -> Result<Vec<BrewUpdate>, BrewError> {
                 token,
                 tap: string_field(record, "tap"),
                 current: string_field(record, "installed_versions")
+                    .or_else(|| {
+                        record
+                            .get("installed_versions")?
+                            .as_array()?
+                            .first()?
+                            .as_str()
+                            .map(str::to_owned)
+                    })
                     .or_else(|| string_field(record, "current_version")),
                 candidate,
                 kind: if root.get("casks").is_some() {
