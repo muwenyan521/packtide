@@ -8,7 +8,8 @@ pub(crate) struct PackageUpdate {
     pub(crate) source: UpdateSource,
     pub(crate) identity: PackageIdentity,
     pub(crate) name: String,
-    pub(crate) version: Option<String>,
+    pub(crate) current: Option<String>,
+    pub(crate) candidate: Option<String>,
     pub(crate) display: String,
 }
 
@@ -16,7 +17,7 @@ impl PackageUpdate {
     pub(crate) fn legacy(
         source: PackageSource,
         name: String,
-        version: Option<String>,
+        candidate: Option<String>,
         display: String,
     ) -> Self {
         let identity = PackageIdentity::new(
@@ -25,38 +26,71 @@ impl PackageUpdate {
             source.default_scope(),
             NativePackageKey::new(name.clone()).expect("legacy update package name"),
         );
-        Self {
-            source,
-            identity,
-            name,
-            version,
-            display,
-        }
+        Self::from_identity(source, identity, name, candidate, display)
     }
 
     pub(crate) fn from_identity(
         source: PackageSource,
         identity: PackageIdentity,
         name: String,
-        version: Option<String>,
+        candidate: Option<String>,
         display: String,
     ) -> Self {
         let display = identity.display_name.clone().unwrap_or(display);
-        let version = version.or_else(|| {
-            display
-                .split_whitespace()
-                .last()
-                .filter(|value| *value != name)
-                .map(str::to_owned)
-        });
+        let (current, candidate) = parse_versions(&name, &display, candidate);
         Self {
             source,
             identity,
             name,
-            version,
+            current,
+            candidate,
             display,
         }
     }
+
+    pub(crate) fn with_versions(
+        source: PackageSource,
+        identity: PackageIdentity,
+        name: String,
+        current: Option<String>,
+        candidate: Option<String>,
+        display: String,
+    ) -> Self {
+        let display = identity.display_name.clone().unwrap_or(display);
+        Self {
+            source,
+            identity,
+            name,
+            current,
+            candidate,
+            display,
+        }
+    }
+}
+
+fn parse_versions(
+    name: &str,
+    display: &str,
+    explicit_candidate: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let parts = display.split_whitespace().collect::<Vec<_>>();
+    let arrow = parts.iter().position(|part| *part == "->");
+    let current = arrow
+        .and_then(|index| index.checked_sub(1))
+        .filter(|index| parts[*index] != name)
+        .map(|index| parts[index].to_owned());
+    let candidate = explicit_candidate.or_else(|| {
+        arrow
+            .and_then(|index| parts.get(index + 1).copied())
+            .or_else(|| {
+                parts
+                    .last()
+                    .copied()
+                    .filter(|value| *value != name && *value != "->")
+            })
+            .map(str::to_owned)
+    });
+    (current, candidate)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,27 +220,39 @@ pub(crate) fn parse_cached_updates(contents: &str) -> Vec<PackageUpdate> {
     contents
         .lines()
         .filter_map(|line| {
-            let mut fields = line.splitn(6, '\t');
+            let mut fields = line.split('\t');
             let first = fields.next()?;
-            if let (Some(scope), Some(native_key), Some(source), Some(name), Some(display)) = (
+            if let (Some(scope), Some(native_key), Some(source), Some(name)) = (
                 fields.next().and_then(PackageScope::parse),
                 fields
                     .next()
                     .and_then(|value| NativePackageKey::new(value).ok()),
                 fields.next().and_then(PackageSource::parse),
                 fields.next(),
-                fields.next(),
             ) {
                 let backend = BackendId::parse(first)?;
                 let identity =
                     PackageIdentity::new(backend, backend.default_kind(), scope, native_key);
-                let mut parts = display.split_whitespace();
-                return Some(PackageUpdate::from_identity(
+                let rest = fields.collect::<Vec<_>>();
+                let (current, candidate, display) = match rest.as_slice() {
+                    [current, candidate, display] => (
+                        (!current.is_empty()).then(|| (*current).to_owned()),
+                        (!candidate.is_empty()).then(|| (*candidate).to_owned()),
+                        (*display).to_owned(),
+                    ),
+                    [display] => {
+                        let (current, candidate) = parse_versions(name, display, None);
+                        (current, candidate, (*display).to_owned())
+                    }
+                    _ => return None,
+                };
+                return Some(PackageUpdate::with_versions(
                     source,
                     identity,
                     name.to_owned(),
-                    parts.next_back().map(str::to_owned),
-                    display.to_owned(),
+                    current,
+                    candidate,
+                    display,
                 ));
             }
 
@@ -238,14 +284,32 @@ pub(crate) fn render_update_rows(updates: &[PackageUpdate]) -> String {
         }
         let color = crate::ui::source_color(item.source);
         let source_label = crate::locale::source_label(crate::locale::current(), item.source);
+        let display = item.display_for_row();
         write!(
             rows,
             "\x1b[{color}m[{:<7}]\x1b[0m\t{}\t{}",
-            source_label, item.name, item.display
+            source_label, item.name, display
         )
         .expect("writing update row to String cannot fail");
     }
     rows
+}
+
+impl PackageUpdate {
+    fn display_for_row(&self) -> String {
+        if self.display.contains("->") {
+            return self.display.clone();
+        }
+        match (&self.current, &self.candidate) {
+            (Some(current), Some(candidate)) => {
+                format!("{} {} -> {}", self.name, current, candidate)
+            }
+            (None, Some(candidate)) if !self.display.contains(candidate) => {
+                format!("{} {}", self.display, candidate)
+            }
+            _ => self.display.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -267,7 +331,8 @@ mod tests {
                     NativePackageKey::new("bash").unwrap(),
                 ),
                 name: "bash".to_owned(),
-                version: Some("5.3".to_owned()),
+                current: Some("5.2".to_owned()),
+                candidate: Some("5.3".to_owned()),
                 display: "bash 5.3".to_owned(),
             },
             PackageUpdate {
@@ -279,7 +344,8 @@ mod tests {
                     NativePackageKey::new("tool").unwrap(),
                 ),
                 name: "tool".to_owned(),
-                version: Some("1.0".to_owned()),
+                current: Some("0.9".to_owned()),
+                candidate: Some("1.0".to_owned()),
                 display: "tool 1.0".to_owned(),
             },
             PackageUpdate {
@@ -291,7 +357,8 @@ mod tests {
                     NativePackageKey::new("org.example.App").unwrap(),
                 ),
                 name: "org.example.App".to_owned(),
-                version: Some("2.0".to_owned()),
+                current: None,
+                candidate: Some("2.0".to_owned()),
                 display: "org.example.App 2.0".to_owned(),
             },
         ]);

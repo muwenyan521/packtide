@@ -128,7 +128,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
             "[{:<7}] {} {}",
             source,
             item.name,
-            item.version.as_deref().unwrap_or("")
+            item.candidate.as_deref().unwrap_or("")
         );
     }
     Ok(())
@@ -207,8 +207,10 @@ impl UpdateCache {
                         + item.identity.native_key.as_str().len()
                         + item.source.as_str().len()
                         + item.name.len()
+                        + item.current.as_deref().map_or(0, str::len)
+                        + item.candidate.as_deref().map_or(0, str::len)
                         + item.display.len()
-                        + 5
+                        + 7
                 })
                 .sum(),
         );
@@ -225,6 +227,14 @@ impl UpdateCache {
             contents.push_str(item.source.as_str());
             contents.push('\t');
             contents.push_str(&item.name);
+            contents.push('\t');
+            if let Some(current) = &item.current {
+                contents.push_str(current);
+            }
+            contents.push('\t');
+            if let Some(candidate) = &item.candidate {
+                contents.push_str(candidate);
+            }
             contents.push('\t');
             contents.push_str(&item.display);
         }

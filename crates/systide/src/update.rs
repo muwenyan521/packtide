@@ -23,7 +23,12 @@ pub(crate) struct UpdateOutcome {
 }
 impl UpdateOutcome {
     pub(crate) fn exit_code(&self) -> i32 {
-        if self.native == StepResult::Failed {
+        if self.native == StepResult::Failed
+            || self
+                .optional
+                .iter()
+                .any(|(_, state)| *state == StepResult::Failed)
+        {
             1
         } else {
             0
@@ -72,7 +77,10 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
         }
     }
     if outcome.exit_code() != 0 {
-        return Err(anyhow!("native package update failed"));
+        if outcome.native == StepResult::Failed {
+            return Err(anyhow!("native package update failed"));
+        }
+        return Err(anyhow!("optional package update failed"));
     }
     if outcome
         .optional
@@ -182,7 +190,7 @@ mod tests {
                 (BackendId::Brew, StepResult::Success),
             ],
         };
-        assert_eq!(outcome.exit_code(), 0);
+        assert_eq!(outcome.exit_code(), 1);
         assert_eq!(outcome.optional.len(), 2);
     }
     #[test]
@@ -266,7 +274,7 @@ mod tests {
                 (BackendId::Snap, StepResult::Success)
             ]
         );
-        assert_eq!(outcome.exit_code(), 0);
+        assert_eq!(outcome.exit_code(), 1);
         println!(
             "optional outcome={:?}; exit={}",
             outcome.optional,
@@ -286,8 +294,8 @@ mod tests {
     fn run_consumes_partial_outcome_without_claiming_full_success() {
         const CHILD: &str = "SYSTIDE_PARTIAL_UPDATE_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            run(BackendId::Paru, Lang::En).expect("partial optional update succeeds");
-            return;
+            assert!(run(BackendId::Paru, Lang::En).is_err());
+            std::process::exit(1);
         }
         let path = command_fixture(0);
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -301,7 +309,7 @@ mod tests {
             .output()
             .expect("run update subprocess");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(output.status.success(), "{output:?}");
+        assert!(!output.status.success(), "{output:?}");
         assert!(stdout.contains("flatpak:"));
         assert!(stdout.contains(msg(Lang::En, "backend.partial")));
         assert!(!stdout.contains(msg(Lang::En, "update_complete")));

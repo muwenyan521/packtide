@@ -16,7 +16,11 @@ fn parses_repository_update_lines_without_losing_raw_text() {
     assert_eq!(updates.len(), 2);
     assert_eq!(updates[0].source, UpdateSource::Pacman);
     assert_eq!(updates[0].name, "linux");
+    assert_eq!(updates[0].current.as_deref(), Some("6.12.1"));
+    assert_eq!(updates[0].candidate.as_deref(), Some("6.12.2"));
     assert_eq!(updates[1].name, "abseil-cpp");
+    assert_eq!(updates[1].current.as_deref(), Some("20260817.0-1"));
+    assert_eq!(updates[1].candidate.as_deref(), Some("20260817.0-2"));
 }
 
 #[test]
@@ -24,16 +28,20 @@ fn parses_flatpak_application_and_version() {
     let updates = parse_flatpak("org.example.App 1.2.3\n");
     assert_eq!(updates[0].source, UpdateSource::Flatpak);
     assert_eq!(updates[0].name, "org.example.App");
-    assert_eq!(updates[0].version.as_deref(), Some("1.2.3"));
+    assert_eq!(updates[0].current, None);
+    assert_eq!(updates[0].candidate.as_deref(), Some("1.2.3"));
+    assert_eq!(updates[0].candidate.as_deref(), Some("1.2.3"));
 }
 
 #[test]
 fn cache_round_trip_preserves_display_text() {
     let updates = parse_cached_updates(
-        "pacman\tsystem\tlinux\tpacman\tlinux\tlinux 6.12 -> 6.13\n\
+        "pacman\tsystem\tlinux\tpacman\tlinux\t6.12\t6.13\tlinux 6.12 -> 6.13\n\
          aur\ttool-git 1 -> 2",
     );
     assert_eq!(updates[0].display, "linux 6.12 -> 6.13");
+    assert_eq!(updates[0].current.as_deref(), Some("6.12"));
+    assert_eq!(updates[0].candidate.as_deref(), Some("6.13"));
     assert_eq!(updates[0].identity.backend, BackendId::Pacman);
     assert_eq!(updates[0].identity.scope, PackageScope::System);
     assert_eq!(updates[0].identity.native_key.as_str(), "linux");
