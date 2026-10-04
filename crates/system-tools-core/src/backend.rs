@@ -1058,11 +1058,7 @@ fn read_flatpak(
                 let output = run_backend_command(
                     backend,
                     "list Flatpak applications",
-                    &[
-                        "list",
-                        "--app",
-                        "--columns=application,origin,name,installation",
-                    ],
+                    &["list", "--app", "--columns=application"],
                 )?;
                 if !output.status.success() {
                     return Err(command_failed(
