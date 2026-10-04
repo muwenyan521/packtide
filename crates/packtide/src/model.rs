@@ -1,5 +1,5 @@
 pub(crate) use system_tools_core::PackageSource as UpdateSource;
-use system_tools_core::PackageSource;
+use system_tools_core::{BackendId, NativePackageKey, PackageScope, PackageSource};
 
 #[derive(Debug)]
 pub(crate) struct PackageUpdate {
@@ -11,11 +11,81 @@ pub(crate) struct PackageUpdate {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct PackageRecord {
+    pub(crate) backend: BackendId,
+    pub(crate) scope: PackageScope,
+    pub(crate) native_key: NativePackageKey,
     pub(crate) source: PackageSource,
     pub(crate) repository: Option<String>,
     pub(crate) name: String,
     pub(crate) listing: PackageListing,
     pub(crate) installed: bool,
+}
+
+impl PackageRecord {
+    pub(crate) fn legacy(
+        source: PackageSource,
+        repository: Option<String>,
+        name: String,
+        listing: PackageListing,
+        installed: bool,
+    ) -> Self {
+        let backend = match source {
+            PackageSource::Aur => BackendId::Paru,
+            PackageSource::Flatpak => BackendId::Flatpak,
+            PackageSource::Apt => BackendId::Apt,
+            PackageSource::Dnf => BackendId::Dnf5,
+            PackageSource::Zypper => BackendId::Zypper,
+            PackageSource::Apk => BackendId::Apk,
+            PackageSource::Xbps => BackendId::Xbps,
+            PackageSource::Snap => BackendId::Snap,
+            PackageSource::Brew => BackendId::Brew,
+            PackageSource::Nix => BackendId::Nix,
+            PackageSource::Pacman => BackendId::Pacman,
+        };
+        let scope = if source == PackageSource::Flatpak
+            && repository.as_deref() == Some("flatpak@system")
+        {
+            PackageScope::System
+        } else {
+            match backend {
+                BackendId::Brew | BackendId::Nix => PackageScope::Profile,
+                BackendId::Paru | BackendId::Yay | BackendId::Flatpak | BackendId::Snap => {
+                    PackageScope::User
+                }
+                _ => PackageScope::System,
+            }
+        };
+        let native_key = NativePackageKey::new(name.clone()).expect("legacy package name");
+        Self {
+            backend,
+            scope,
+            native_key,
+            source,
+            repository,
+            name,
+            listing,
+            installed,
+        }
+    }
+}
+
+impl PackageRecord {
+    #[allow(dead_code)]
+    pub(crate) fn identity(&self) -> system_tools_core::PackageIdentity {
+        system_tools_core::PackageIdentity::new(
+            self.backend,
+            match self.source {
+                PackageSource::Aur => system_tools_core::PackageKind::Aur,
+                PackageSource::Flatpak => system_tools_core::PackageKind::Flatpak,
+                PackageSource::Snap => system_tools_core::PackageKind::Snap,
+                PackageSource::Brew => system_tools_core::PackageKind::BrewFormula,
+                PackageSource::Nix => system_tools_core::PackageKind::Nix,
+                _ => system_tools_core::PackageKind::System,
+            },
+            self.scope,
+            self.native_key.clone(),
+        )
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]

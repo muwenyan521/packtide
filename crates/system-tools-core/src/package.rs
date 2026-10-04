@@ -14,6 +14,20 @@ pub enum PackageSource {
 }
 
 impl PackageSource {
+    pub const ALL: [Self; 11] = [
+        Self::Pacman,
+        Self::Aur,
+        Self::Flatpak,
+        Self::Apt,
+        Self::Dnf,
+        Self::Zypper,
+        Self::Apk,
+        Self::Xbps,
+        Self::Snap,
+        Self::Brew,
+        Self::Nix,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pacman => "pacman",
@@ -45,6 +59,25 @@ impl PackageSource {
             "nix" => Some(Self::Nix),
             _ => None,
         }
+    }
+
+    pub const fn hidden_prefix(self) -> &'static str {
+        match self {
+            Self::Pacman | Self::Aur => "PKG",
+            Self::Flatpak => "FLTK",
+            Self::Apt => "APT",
+            Self::Dnf => "DNF",
+            Self::Zypper => "ZYPPER",
+            Self::Apk => "APK",
+            Self::Xbps => "XBPS",
+            Self::Snap => "SNAP",
+            Self::Brew => "BREW",
+            Self::Nix => "NIX",
+        }
+    }
+
+    pub fn hidden_token(self, detail: &str) -> String {
+        format!("{}:{}", self.hidden_prefix(), detail)
     }
 }
 

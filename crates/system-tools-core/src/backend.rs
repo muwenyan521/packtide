@@ -1707,7 +1707,11 @@ fn read_flatpak(
                 let output = run_backend_command(
                     backend,
                     "list Flatpak applications",
-                    &["list", "--app", "--columns=application"],
+                    &[
+                        "list",
+                        "--app",
+                        "--columns=application,origin,name,installation",
+                    ],
                 )?;
                 if !output.status.success() {
                     return Err(command_failed(
@@ -2280,6 +2284,17 @@ mod tests {
             Some("live".to_owned())
         );
         assert_eq!(super::select_flatpak_catalog(None, Some("\n")), None);
+    }
+
+    #[test]
+    fn flatpak_installed_rows_preserve_system_scope() {
+        let rows = super::parse_flatpak_catalog(
+            "org.example.User\tflathub\tUser Display\tuser\norg.example.System\tflathub\tSystem Display\tsystem",
+            None,
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].scope, PackageScope::User);
+        assert_eq!(rows[1].scope, PackageScope::System);
     }
 
     #[test]

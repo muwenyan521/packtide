@@ -69,13 +69,13 @@ pub(crate) fn install_rows_streaming(
         let Some((repository, name)) = package.native_key.as_str().split_once('/') else {
             continue;
         };
-        let record = PackageRecord {
-            source: system_tools_core::PackageSource::Pacman,
-            repository: Some(repository.to_owned()),
-            name: name.to_owned(),
-            listing: crate::model::PackageListing::Version("-".to_owned()),
-            installed: catalog.installed.contains(name),
-        };
+        let record = PackageRecord::legacy(
+            system_tools_core::PackageSource::Pacman,
+            Some(repository.to_owned()),
+            name.to_owned(),
+            crate::model::PackageListing::Version("-".to_owned()),
+            catalog.installed.contains(name),
+        );
         write_official(&record)?;
         catalog.official_names.insert(record.name.clone());
         if retain_official {
@@ -134,7 +134,11 @@ pub(crate) fn flatpak_rows() -> String {
     }
     let rows = system_tools_core::run_capture(
         "flatpak",
-        &["list", "--app", "--columns=application,origin,name"],
+        &[
+            "list",
+            "--app",
+            "--columns=application,origin,name,installation",
+        ],
         true,
     )
     .map(|output| output.stdout)

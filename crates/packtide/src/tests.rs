@@ -54,30 +54,30 @@ fn keeps_aur_and_flatpak_removal_rows_distinct() {
     assert_eq!(
         records,
         vec![
-            PackageRecord {
-                source: PackageSource::Pacman,
-                repository: None,
-                name: "bash".to_owned(),
-                listing: PackageListing::Version("5.2".to_owned()),
-                installed: true,
-            },
-            PackageRecord {
-                source: PackageSource::Aur,
-                repository: None,
-                name: "custom-tool".to_owned(),
-                listing: PackageListing::Version("1.0".to_owned()),
-                installed: true,
-            },
-            PackageRecord {
-                source: PackageSource::Flatpak,
-                repository: None,
-                name: "org.example.App".to_owned(),
-                listing: PackageListing::Flatpak {
+            PackageRecord::legacy(
+                PackageSource::Pacman,
+                None,
+                "bash".to_owned(),
+                PackageListing::Version("5.2".to_owned()),
+                true
+            ),
+            PackageRecord::legacy(
+                PackageSource::Aur,
+                None,
+                "custom-tool".to_owned(),
+                PackageListing::Version("1.0".to_owned()),
+                true
+            ),
+            PackageRecord::legacy(
+                PackageSource::Flatpak,
+                None,
+                "org.example.App".to_owned(),
+                PackageListing::Flatpak {
                     app_name: "Example App".to_owned(),
                     origin: "flathub".to_owned(),
                 },
-                installed: true,
-            },
+                true
+            ),
         ]
     );
     let rows = render_package_rows(&records, PackageListMode::Remove);
@@ -118,13 +118,13 @@ fn parses_install_rows_with_padding_and_installed_state() {
 
 #[test]
 fn renders_package_records_with_ui_owned_ansi_and_columns() {
-    let records = vec![PackageRecord {
-        source: PackageSource::Pacman,
-        repository: Some("core".to_owned()),
-        name: "bash".to_owned(),
-        listing: PackageListing::Version("5.3-1".to_owned()),
-        installed: true,
-    }];
+    let records = vec![PackageRecord::legacy(
+        PackageSource::Pacman,
+        Some("core".to_owned()),
+        "bash".to_owned(),
+        PackageListing::Version("5.3-1".to_owned()),
+        true,
+    )];
 
     let rows = render_package_rows(&records, PackageListMode::Install);
 

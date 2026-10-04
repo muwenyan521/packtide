@@ -20,13 +20,13 @@ pub(crate) fn parse_install_rows(
             if !valid_package_name(repo) || !valid_package_name(name) {
                 return None;
             }
-            Some(PackageRecord {
-                source: PackageSource::Pacman,
-                repository: Some(repo.to_owned()),
-                name: name.to_owned(),
-                listing: PackageListing::Version(version.to_owned()),
-                installed: installed.contains(name),
-            })
+            Some(PackageRecord::legacy(
+                PackageSource::Pacman,
+                Some(repo.to_owned()),
+                name.to_owned(),
+                PackageListing::Version(version.to_owned()),
+                installed.contains(name),
+            ))
         })
         .collect()
 }
@@ -40,13 +40,13 @@ pub(crate) fn parse_install_line(line: &str, installed: &HashSet<String>) -> Opt
     if !valid_package_name(repo) || !valid_package_name(name) {
         return None;
     }
-    Some(PackageRecord {
-        source: PackageSource::Pacman,
-        repository: Some(repo.to_owned()),
-        name: name.to_owned(),
-        listing: PackageListing::Version(version.to_owned()),
-        installed: installed.contains(name),
-    })
+    Some(PackageRecord::legacy(
+        PackageSource::Pacman,
+        Some(repo.to_owned()),
+        name.to_owned(),
+        PackageListing::Version(version.to_owned()),
+        installed.contains(name),
+    ))
 }
 
 #[allow(dead_code)]
@@ -66,13 +66,13 @@ pub(crate) fn parse_remove_rows(installed: &str, sync: &str) -> Vec<PackageRecor
             } else {
                 PackageSource::Aur
             };
-            Some(PackageRecord {
+            Some(PackageRecord::legacy(
                 source,
-                repository: None,
-                name: name.to_owned(),
-                listing: PackageListing::Version(version.to_owned()),
-                installed: true,
-            })
+                None,
+                name.to_owned(),
+                PackageListing::Version(version.to_owned()),
+                true,
+            ))
         })
         .collect()
 }

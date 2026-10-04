@@ -10,15 +10,18 @@ pub(crate) fn parse_remove_rows(flatpak: &str) -> Vec<PackageRecord> {
             let id = fields.next()?.trim();
             let origin = fields.next().unwrap_or_default().trim();
             let name = fields.next().unwrap_or_default().trim();
-            (!id.is_empty()).then(|| PackageRecord {
-                source: PackageSource::Flatpak,
-                repository: None,
-                name: id.to_owned(),
-                listing: PackageListing::Flatpak {
-                    app_name: name.to_owned(),
-                    origin: origin.to_owned(),
-                },
-                installed: true,
+            let installation = fields.next().unwrap_or("user").trim();
+            (!id.is_empty()).then(|| {
+                PackageRecord::legacy(
+                    PackageSource::Flatpak,
+                    (installation == "system").then(|| "flatpak@system".to_owned()),
+                    id.to_owned(),
+                    PackageListing::Flatpak {
+                        app_name: name.to_owned(),
+                        origin: origin.to_owned(),
+                    },
+                    true,
+                )
             })
         })
         .collect()

@@ -95,6 +95,15 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         execute_package_typed(helper, TransactionAction::Remove, &package_ids)?;
     }
     if command_exists("flatpak") {
+        if std::env::var_os("PACKTIDE_DEBUG_REMOVE_ROWS").is_some() {
+            eprintln!(
+                "flatpak_records={:?}",
+                records
+                    .iter()
+                    .map(|r| (&r.name, &r.repository, r.scope))
+                    .collect::<Vec<_>>()
+            );
+        }
         if !flatpak_user.is_empty() {
             execute_flatpak(&flatpak_user)?;
         }
@@ -131,20 +140,24 @@ fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::Pack
         .packages
         .into_iter()
         .filter(|package| !foreign_names.contains(package.native_key.as_str()))
-        .map(|package| PackageRecord {
-            source: PackageSource::Pacman,
-            repository: None,
-            name: package.native_key.as_str().to_owned(),
-            listing: PackageListing::Version(String::new()),
-            installed: true,
+        .map(|package| {
+            PackageRecord::legacy(
+                PackageSource::Pacman,
+                None,
+                package.native_key.as_str().to_owned(),
+                PackageListing::Version(String::new()),
+                true,
+            )
         })
         .collect::<Vec<_>>();
-    records.extend(foreign_installed.into_iter().map(|package| PackageRecord {
-        source: PackageSource::Aur,
-        repository: Some("aur".to_owned()),
-        name: package.native_key.as_str().to_owned(),
-        listing: PackageListing::Version(String::new()),
-        installed: true,
+    records.extend(foreign_installed.into_iter().map(|package| {
+        PackageRecord::legacy(
+            PackageSource::Aur,
+            Some("aur".to_owned()),
+            package.native_key.as_str().to_owned(),
+            PackageListing::Version(String::new()),
+            true,
+        )
     }));
     if command_exists("flatpak") {
         let typed_flatpak = registry
@@ -154,19 +167,18 @@ fn rows(pacman: &std::path::Path, helper: &str) -> Result<Vec<crate::model::Pack
             .map_err(|error| anyhow::anyhow!("Flatpak typed installed read failed: {error}"))?
             .packages;
         records.extend(typed_flatpak.into_iter().map(|package| {
-            PackageRecord {
-                source: PackageSource::Flatpak,
-                repository: (package.scope == PackageScope::System)
-                    .then(|| "flatpak@system".to_owned()),
-                name: package.native_key.as_str().to_owned(),
-                listing: PackageListing::Flatpak {
+            PackageRecord::legacy(
+                PackageSource::Flatpak,
+                (package.scope == PackageScope::System).then(|| "flatpak@system".to_owned()),
+                package.native_key.as_str().to_owned(),
+                PackageListing::Flatpak {
                     app_name: package
                         .display_name
                         .unwrap_or_else(|| package.native_key.as_str().to_owned()),
                     origin: package.origin.unwrap_or_default(),
                 },
-                installed: true,
-            }
+                true,
+            )
         }));
     }
     let _ = pacman;

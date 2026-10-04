@@ -86,13 +86,13 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
         if rows_started {
             output.write_all(b"\n")?;
         }
-        let record = PackageRecord {
-            source: PackageSource::Aur,
-            repository: Some("aur".to_owned()),
-            name: name.to_owned(),
-            listing: PackageListing::Version("-".to_owned()),
-            installed: catalog.installed.contains(name),
-        };
+        let record = PackageRecord::legacy(
+            PackageSource::Aur,
+            Some("aur".to_owned()),
+            name.to_owned(),
+            PackageListing::Version("-".to_owned()),
+            catalog.installed.contains(name),
+        );
         let mut rendered = Vec::new();
         write_package_row(&mut rendered, &record, PackageListMode::Install)?;
         output.write_all(&rendered)?;
@@ -187,11 +187,7 @@ fn hidden_source_token(record: &PackageRecord) -> String {
         PackageSource::Pacman => {
             format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
         }
-        source => format!(
-            "{}:{}",
-            source.as_str().to_ascii_uppercase(),
-            record.repository.as_deref().unwrap_or(source.as_str())
-        ),
+        source => source.hidden_token(record.repository.as_deref().unwrap_or(source.as_str())),
     }
 }
 
@@ -269,7 +265,13 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
         };
         return Some(PackageRow {
             source,
-            repository: (source != PackageSource::Flatpak).then(|| repository.to_owned()),
+            repository: if source == PackageSource::Flatpak && repository == "flatpak@system" {
+                Some("flatpak@system".to_owned())
+            } else if source == PackageSource::Flatpak {
+                None
+            } else {
+                Some(repository.to_owned())
+            },
             name: name.to_owned(),
         });
     }
@@ -414,13 +416,13 @@ mod tests {
 
     #[test]
     fn pads_cjk_names_by_terminal_columns() {
-        let record = PackageRecord {
-            source: PackageSource::Flatpak,
-            repository: None,
-            name: "示例应用".to_owned(),
-            listing: PackageListing::Version("1.0".to_owned()),
-            installed: true,
-        };
+        let record = PackageRecord::legacy(
+            PackageSource::Flatpak,
+            None,
+            "示例应用".to_owned(),
+            PackageListing::Version("1.0".to_owned()),
+            true,
+        );
         let row = super::render_package_rows(&[record], super::PackageListMode::Remove);
         let clean = super::super::strip_ansi(&row);
         let name_column = clean.split('\t').nth(2).expect("name column");
@@ -429,22 +431,22 @@ mod tests {
 
     #[test]
     fn install_emphasis_does_not_leak_into_remove_rows() {
-        let record = PackageRecord {
-            source: PackageSource::Pacman,
-            repository: Some("core".to_owned()),
-            name: "bash".to_owned(),
-            listing: PackageListing::Version("5.3-1".to_owned()),
-            installed: true,
-        };
+        let record = PackageRecord::legacy(
+            PackageSource::Pacman,
+            Some("core".to_owned()),
+            "bash".to_owned(),
+            PackageListing::Version("5.3-1".to_owned()),
+            true,
+        );
         let install = super::render_package_rows(&[record], super::PackageListMode::Install);
         let remove = super::render_package_rows(
-            &[PackageRecord {
-                source: PackageSource::Pacman,
-                repository: Some("core".to_owned()),
-                name: "bash".to_owned(),
-                listing: PackageListing::Version("5.3-1".to_owned()),
-                installed: true,
-            }],
+            &[PackageRecord::legacy(
+                PackageSource::Pacman,
+                Some("core".to_owned()),
+                "bash".to_owned(),
+                PackageListing::Version("5.3-1".to_owned()),
+                true,
+            )],
             super::PackageListMode::Remove,
         );
 
@@ -458,13 +460,13 @@ mod tests {
 
     #[test]
     fn preserves_long_package_values_for_fzf_accept() {
-        let record = PackageRecord {
-            source: PackageSource::Pacman,
-            repository: Some("community-long-name".to_owned()),
-            name: "package-name-that-is-longer-than-the-display-column".to_owned(),
-            listing: PackageListing::Version("version-with-a-long-suffix-2026.09.27-1".to_owned()),
-            installed: false,
-        };
+        let record = PackageRecord::legacy(
+            PackageSource::Pacman,
+            Some("community-long-name".to_owned()),
+            "package-name-that-is-longer-than-the-display-column".to_owned(),
+            PackageListing::Version("version-with-a-long-suffix-2026.09.27-1".to_owned()),
+            false,
+        );
         let row = super::render_package_rows(&[record], super::PackageListMode::Install);
         let plain = super::super::strip_ansi(&row);
         assert!(plain.contains("package-name-that-is-longer-than-the-display-column"));
@@ -474,13 +476,13 @@ mod tests {
     #[test]
     fn install_catalog_skips_official_and_duplicate_aur_names() {
         let catalog = crate::sources::InstallCatalog {
-            official: vec![PackageRecord {
-                source: PackageSource::Pacman,
-                repository: Some("core".to_owned()),
-                name: "bash".to_owned(),
-                listing: PackageListing::Version("5.3".to_owned()),
-                installed: false,
-            }],
+            official: vec![PackageRecord::legacy(
+                PackageSource::Pacman,
+                Some("core".to_owned()),
+                "bash".to_owned(),
+                PackageListing::Version("5.3".to_owned()),
+                false,
+            )],
             official_names: HashSet::new(),
             aur_names: "bash\ntool\ntool\n../invalid\n".to_owned(),
             installed: HashSet::new(),
