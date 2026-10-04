@@ -1021,8 +1021,11 @@ fn read_pacman(
             let packages = output
                 .stdout
                 .lines()
-                .filter_map(parse_update_identity)
-                .map(|name| identity_for(backend, PackageKind::System, PackageScope::System, name))
+                .filter_map(|line| parse_update_identity(line).map(|name| (name, line)))
+                .map(|(name, line)| {
+                    identity_for(backend, PackageKind::System, PackageScope::System, name)
+                        .map(|identity| identity.with_display_name(line))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
@@ -1124,8 +1127,11 @@ fn read_aur(
             let packages = output
                 .stdout
                 .lines()
-                .filter_map(parse_update_identity)
-                .map(|name| identity_for(backend, PackageKind::Aur, PackageScope::User, name))
+                .filter_map(|line| parse_update_identity(line).map(|name| (name, line)))
+                .map(|(name, line)| {
+                    identity_for(backend, PackageKind::Aur, PackageScope::User, name)
+                        .map(|identity| identity.with_display_name(line))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
@@ -1230,7 +1236,15 @@ fn read_apt(
             })?
             .into_iter()
             .filter_map(|p| {
-                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+                let display = format!(
+                    "{} {} -> {}",
+                    p.name,
+                    p.current.as_deref().unwrap_or("?"),
+                    p.candidate
+                );
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+                    .ok()
+                    .map(|identity| identity.with_display_name(display))
             })
             .collect(),
     };
@@ -1291,16 +1305,11 @@ fn read_dnf_with_resolver(
         ),
     };
     let out = execute_plan(&plan, backend, "read packages")?;
-    if matches!(operation, ReadOperation::Catalog | ReadOperation::Updates)
-        && out
-            .status
-            .code()
-            .map(crate::backends::dnf::parse_check_update_status)
-            == Some(Ok(true))
+    if !out.status.success()
+        && !(matches!(operation, ReadOperation::Catalog | ReadOperation::Updates)
+            && out.status.code() == Some(100))
+        && !matches!(operation, ReadOperation::Details { .. })
     {
-        return Ok((Vec::new(), CatalogStrategy::Enumerated, None));
-    }
-    if !out.status.success() && !matches!(operation, ReadOperation::Details { .. }) {
         return Err(command_failed(backend, "read packages", &out));
     }
     if matches!(operation, ReadOperation::Details { .. }) {
@@ -1345,7 +1354,16 @@ fn read_dnf_with_resolver(
         .into_iter()
         .filter(|p| !parser || p.installed)
         .filter_map(|p| {
-            identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            let display = format!("{} {}", p.name, p.version);
+            identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+                .ok()
+                .map(|identity| {
+                    if matches!(operation, ReadOperation::Updates) {
+                        identity.with_display_name(display)
+                    } else {
+                        identity
+                    }
+                })
         })
         .collect();
     if let ReadOperation::Search { query } = operation {
@@ -1399,7 +1417,16 @@ fn read_snap(
         ReadOperation::Updates => parse_updates(&output.stdout)
             .map_err(|error| optional_read_error(backend, error))?
             .iter()
-            .map(|package| package.identity())
+            .map(|package| {
+                package.identity().map(|identity| {
+                    identity.with_display_name(format!(
+                        "{} {} -> {}",
+                        package.name,
+                        package.current.as_deref().unwrap_or("?"),
+                        package.candidate
+                    ))
+                })
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| optional_read_error(backend, error))?,
         _ => {
@@ -1491,12 +1518,19 @@ fn read_brew(
             .map_err(|error| optional_read_error(backend, error))?
             .into_iter()
             .map(|package| {
+                let display = format!(
+                    "{} {} -> {}",
+                    package.token,
+                    package.current.as_deref().unwrap_or("?"),
+                    package.candidate
+                );
                 identity_for(
                     backend,
                     package.kind.package_kind(),
                     PackageScope::Profile,
                     package.token,
                 )
+                .map(|identity| identity.with_display_name(display))
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
@@ -1551,7 +1585,7 @@ fn read_nix(
     .map_err(|error| optional_read_error(backend, error))?;
     let records = if matches!(operation, ReadOperation::Updates) {
         let mut updates = Vec::new();
-        for record in records.into_iter().filter(|record| record.active) {
+        for mut record in records.into_iter().filter(|record| record.active) {
             let plan = provider
                 .update_candidate_plan(&record)
                 .map_err(|error| optional_read_error(backend, error))?;
@@ -1571,6 +1605,12 @@ fn read_nix(
                 return Err(optional_read_error(backend, "invalid candidate store path"));
             }
             if !record.store_paths.contains(&store_path) {
+                record.name = format!(
+                    "{} {} -> {}",
+                    record.selector,
+                    record.store_paths.join(","),
+                    store_path
+                );
                 updates.push(record);
             }
         }
@@ -1628,7 +1668,15 @@ fn read_zypper(
             .map_err(|e| optional_read_error(backend, e))?
             .into_iter()
             .filter_map(|p| {
-                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+                let display = format!(
+                    "{} {} -> {}",
+                    p.name,
+                    p.current.as_deref().unwrap_or("?"),
+                    p.candidate
+                );
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+                    .ok()
+                    .map(|identity| identity.with_display_name(display))
             })
             .collect(),
         _ => crate::backends::zypper::parse_search_xml(&output.stdout)
@@ -1686,7 +1734,18 @@ fn read_apk(
     }
     .map_err(|e| optional_read_error(backend, e))?
     .into_iter()
-    .filter_map(|p| identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok())
+    .filter_map(|p| {
+        let display = format!("{} {}", p.name, p.version);
+        identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+            .ok()
+            .map(|identity| {
+                if matches!(operation, ReadOperation::Updates) {
+                    identity.with_display_name(display)
+                } else {
+                    identity
+                }
+            })
+    })
     .collect();
     let detail = details.then_some(ReadDetails {
         stdout: output.stdout,
@@ -1731,7 +1790,18 @@ fn read_xbps(
     }
     .map_err(|e| optional_read_error(backend, e))?
     .into_iter()
-    .filter_map(|p| identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok())
+    .filter_map(|p| {
+        let display = format!("{} {}", p.name, p.version);
+        identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+            .ok()
+            .map(|identity| {
+                if matches!(operation, ReadOperation::Updates) {
+                    identity.with_display_name(display)
+                } else {
+                    identity
+                }
+            })
+    })
     .collect();
     let detail = details.then_some(ReadDetails {
         stdout: output.stdout,
@@ -1817,15 +1887,16 @@ fn read_flatpak(
             let packages = output
                 .stdout
                 .lines()
-                .filter_map(|line| line.split_whitespace().next())
-                .filter(|id| valid_package_token(id))
-                .map(|id| {
+                .filter_map(|line| line.split_whitespace().next().map(|id| (id, line)))
+                .filter(|(id, _)| valid_package_token(id))
+                .map(|(id, line)| {
                     identity_for(
                         backend,
                         PackageKind::Flatpak,
                         PackageScope::User,
                         id.to_owned(),
                     )
+                    .map(|identity| identity.with_display_name(line))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((packages, CatalogStrategy::Enumerated, None))
@@ -2766,7 +2837,7 @@ mod tests {
     }
 
     #[test]
-    fn dnf_read_dispatch_treats_exit_100_as_empty_and_preserves_other_failures() {
+    fn dnf_read_dispatch_parses_exit_100_updates_and_preserves_other_failures() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = std::env::temp_dir().join(format!(
@@ -2777,7 +2848,8 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create DNF status fixture");
         let fixture = r#"#!/bin/sh
 case "$1:$2" in
-    list:--json|list:--upgrades|repoquery:--upgrades|repoquery:--qf) exit 100 ;;
+    list:--upgrades) printf '%s\n' '[{"name":"bash","version":"5.3"}]'; exit 100 ;;
+    repoquery:--upgrades) printf 'bash\t0\t5.3\t1\tx86_64\tfedora\t0\n'; exit 100 ;;
 esac
 printf '%s\n' 'dnf read failed' >&2
 exit 2
@@ -2791,12 +2863,11 @@ exit 2
         let resolver = crate::ExecutableResolver::from_path(Some(directory.as_os_str()));
 
         for backend in [BackendId::Dnf4, BackendId::Dnf5] {
-            for operation in [ReadOperation::Catalog, ReadOperation::Updates] {
-                let result = super::read_dnf_with_resolver(operation, backend, &resolver)
-                    .expect("DNF exit 100 means no packages");
-                assert!(result.0.is_empty());
-                assert_eq!(result.1, CatalogStrategy::Enumerated);
-            }
+            let result = super::read_dnf_with_resolver(ReadOperation::Updates, backend, &resolver)
+                .expect("DNF exit 100 means updates are available");
+            assert_eq!(result.0[0].native_key.as_str(), "bash");
+            assert_eq!(result.0[0].display_name.as_deref(), Some("bash 5.3"));
+            assert_eq!(result.1, CatalogStrategy::Enumerated);
 
             let error = super::read_dnf_with_resolver(ReadOperation::Installed, backend, &resolver)
                 .expect_err("DNF exit 2 must remain an error");

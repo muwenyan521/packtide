@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::ExecutableResolver;
-use system_tools_core::{BackendId, NativeBackend, backend_from_os_release};
+use system_tools_core::{BackendId, backend_from_os_release};
 
 use crate::cli::{Cli, CommandLine, CompatibilityRoute, compatibility_route};
 use crate::commands::sysup;
@@ -45,16 +45,10 @@ pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
     let native = backend_from_os_release(&os_release).map_err(|error| {
         anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
     })?;
-    let backend = match native {
-        NativeBackend::Pacman => BackendId::Pacman,
-        NativeBackend::Apt => BackendId::Apt,
-        NativeBackend::Dnf => BackendId::Dnf5,
-        NativeBackend::Zypper => BackendId::Zypper,
-        NativeBackend::Apk => BackendId::Apk,
-        NativeBackend::Xbps => BackendId::Xbps,
-    };
+    let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
+    let backend = native.backend_id(|command| resolver.resolve(command).is_some());
     let command = match backend {
-        BackendId::Dnf5 | BackendId::Dnf4 => "dnf",
+        BackendId::Dnf4 => "dnf",
         other => other.as_str(),
     };
     if ExecutableResolver::from_path(env::var_os("PATH").as_deref())

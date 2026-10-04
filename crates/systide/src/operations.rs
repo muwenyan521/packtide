@@ -30,14 +30,9 @@ fn backend_for_detection(
         };
         anyhow::anyhow!("{} ({})", msg(lang, key), msg(lang, "capability.upgrade"))
     })?;
-    let backend = match native {
-        NativeBackend::Pacman => BackendId::Pacman,
-        NativeBackend::Apt => BackendId::Apt,
-        NativeBackend::Dnf => BackendId::Dnf5,
-        NativeBackend::Zypper => BackendId::Zypper,
-        NativeBackend::Apk => BackendId::Apk,
-        NativeBackend::Xbps => BackendId::Xbps,
-    };
+    let resolver =
+        system_tools_core::ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let backend = native.backend_id(|command| resolver.resolve(command).is_some());
     Ok(backend)
 }
 
@@ -47,7 +42,13 @@ fn detect_manager_from_input(
     command_available: impl Fn(&std::ffi::OsStr) -> bool,
     lang: Lang,
 ) -> Result<BackendId> {
-    backend_for_detection(detect_native_backend(os_release, command_available), lang)
+    let native = detect_native_backend(os_release, &command_available);
+    let backend = backend_for_detection(native, lang)?;
+    Ok(if matches!(backend, BackendId::Dnf4 | BackendId::Dnf5) {
+        NativeBackend::Dnf.backend_id(command_available)
+    } else {
+        backend
+    })
 }
 
 #[cfg(test)]
@@ -89,6 +90,17 @@ mod tests {
             Lang::Zh,
         )
         .expect("Fedora should select dnf");
+        assert_eq!(manager, BackendId::Dnf4);
+    }
+
+    #[test]
+    fn dnf5_only_native_backend_is_selected() {
+        let manager = detect_manager_from_input(
+            "ID=fedora\n",
+            |command| command == OsStr::new("dnf5"),
+            Lang::En,
+        )
+        .expect("DNF5-only host should be supported");
         assert_eq!(manager, BackendId::Dnf5);
     }
 }

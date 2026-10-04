@@ -38,9 +38,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
     let interactive = fzf.is_some();
     let background_refresh = interactive && !refresh && !fresh;
     let repo_aur = if !refresh && fresh {
-        fresh_repo_aur
-            .or_else(query_arch_updates)
-            .unwrap_or_default()
+        fresh_repo_aur.unwrap_or_default()
     } else if background_refresh {
         cache.read_repo_aur().unwrap_or_default()
     } else {
@@ -48,7 +46,7 @@ pub(crate) fn run(refresh: bool) -> Result<()> {
     };
     let updates = repo_aur
         .into_iter()
-        .chain(query_native_updates())
+        .chain(query_native_updates()?)
         .chain(query_flatpak_updates())
         .chain(query_optional_updates())
         .collect::<Vec<_>>();
@@ -238,17 +236,13 @@ impl UpdateCache {
         if !lock.is_owner() {
             return Ok(self.read_repo_aur().unwrap_or_default());
         }
-        match query_arch_updates() {
-            Some(queried) => {
-                self.write_repo_aur(&queried)?;
-                Ok(queried)
-            }
-            None => Ok(self.read_repo_aur().unwrap_or_default()),
-        }
+        let queried = query_arch_updates()?;
+        self.write_repo_aur(&queried)?;
+        Ok(queried)
     }
 }
 
-fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
+fn query_arch_updates() -> Result<Vec<PackageUpdate>> {
     let mut updates = Vec::new();
     let registry = BackendRegistry::default();
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
@@ -258,9 +252,10 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
     {
         let started = Instant::now();
         let typed = registry
-            .backend(BackendId::Pacman)?
+            .backend(BackendId::Pacman)
+            .context("pacman update provider missing")?
             .read(ReadOperation::Updates)
-            .ok()?;
+            .context("native pacman update query failed")?;
         updates.extend(typed.packages.into_iter().map(|package| {
             let name = package.native_key.as_str().to_owned();
             PackageUpdate::from_identity(PackageSource::Pacman, package, name.clone(), None, name)
@@ -277,10 +272,16 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         } else {
             BackendId::Paru
         };
-        let typed = registry
-            .backend(backend)?
-            .read(ReadOperation::Updates)
-            .ok()?;
+        let provider = registry
+            .backend(backend)
+            .context("AUR update provider missing")?;
+        let typed = match provider.read(ReadOperation::Updates) {
+            Ok(typed) => typed,
+            Err(error) => {
+                eprintln!("update diagnostics: {}: {error}", backend.as_str());
+                return Ok(updates);
+            }
+        };
         updates.extend(typed.packages.into_iter().map(|package| {
             let display = package.native_key.as_str().to_owned();
             let name = package
@@ -292,40 +293,39 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
         }));
         debug_source_timing("aur_updates", started);
     }
-    Some(updates)
+    Ok(updates)
 }
 
-fn query_native_updates() -> Vec<PackageUpdate> {
-    let backend = crate::app::native_backend("capability.updates").ok();
-    let Some(backend) = backend else {
-        return Vec::new();
-    };
+fn query_native_updates() -> Result<Vec<PackageUpdate>> {
+    let backend = crate::app::native_backend("capability.updates")?;
+    if backend == BackendId::Pacman {
+        return Ok(Vec::new());
+    }
     let registry = BackendRegistry::default();
-    let Some(provider) = registry.backend(backend) else {
-        return Vec::new();
-    };
-    provider
+    let provider = registry
+        .backend(backend)
+        .context("native update provider missing")?;
+    let result = provider
         .read(ReadOperation::Updates)
-        .ok()
-        .map(|result| {
-            result
-                .packages
-                .into_iter()
-                .map(|package| {
-                    let source = match backend {
-                        BackendId::Apt => PackageSource::Apt,
-                        BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
-                        BackendId::Zypper => PackageSource::Zypper,
-                        BackendId::Apk => PackageSource::Apk,
-                        BackendId::Xbps => PackageSource::Xbps,
-                        _ => PackageSource::Pacman,
-                    };
-                    let name = package.native_key.as_str().to_owned();
-                    PackageUpdate::from_identity(source, package, name.clone(), None, name)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .with_context(|| format!("native {} update query failed", backend.as_str()))?;
+    Ok({
+        result
+            .packages
+            .into_iter()
+            .map(|package| {
+                let source = match backend {
+                    BackendId::Apt => PackageSource::Apt,
+                    BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
+                    BackendId::Zypper => PackageSource::Zypper,
+                    BackendId::Apk => PackageSource::Apk,
+                    BackendId::Xbps => PackageSource::Xbps,
+                    _ => PackageSource::Pacman,
+                };
+                let name = package.native_key.as_str().to_owned();
+                PackageUpdate::from_identity(source, package, name.clone(), None, name)
+            })
+            .collect()
+    })
 }
 
 fn query_flatpak_updates() -> Vec<PackageUpdate> {
@@ -338,6 +338,7 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
             let typed = registry
                 .backend(BackendId::Flatpak)?
                 .read(ReadOperation::Updates)
+                .map_err(|error| eprintln!("update diagnostics: flatpak: {error}"))
                 .ok()?;
             let _ = flatpak;
             Some(typed)
@@ -376,7 +377,13 @@ fn query_optional_updates() -> Vec<PackageUpdate> {
         let started = Instant::now();
         resolver.resolve(std::ffi::OsStr::new(command))?;
         let provider = registry.backend(backend)?;
-        let result = provider.read(ReadOperation::Updates).ok()?;
+        let result = match provider.read(ReadOperation::Updates) {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("update diagnostics: {}: {error}", backend.as_str());
+                return None;
+            }
+        };
         debug_source_timing(source.as_str(), started);
         Some(result.packages.into_iter().map(move |package| {
             let name = package.native_key.as_str().to_owned();

@@ -41,6 +41,14 @@ impl PackageUpdate {
         version: Option<String>,
         display: String,
     ) -> Self {
+        let display = identity.display_name.clone().unwrap_or(display);
+        let version = version.or_else(|| {
+            display
+                .split_whitespace()
+                .last()
+                .filter(|value| *value != name)
+                .map(str::to_owned)
+        });
         Self {
             source,
             identity,

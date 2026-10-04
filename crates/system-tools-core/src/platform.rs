@@ -11,6 +11,20 @@ pub enum NativeBackend {
     Xbps,
 }
 
+impl NativeBackend {
+    pub fn backend_id(self, command_available: impl Fn(&OsStr) -> bool) -> crate::BackendId {
+        match self {
+            Self::Pacman => crate::BackendId::Pacman,
+            Self::Apt => crate::BackendId::Apt,
+            Self::Dnf if command_available(OsStr::new("dnf5")) => crate::BackendId::Dnf5,
+            Self::Dnf => crate::BackendId::Dnf4,
+            Self::Zypper => crate::BackendId::Zypper,
+            Self::Apk => crate::BackendId::Apk,
+            Self::Xbps => crate::BackendId::Xbps,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformError {
     MalformedOsRelease,
@@ -190,10 +204,11 @@ pub fn detect_native_backend(
     command_available: impl Fn(&OsStr) -> bool,
 ) -> Result<NativeBackend, PlatformError> {
     let backend = backend_from_os_release(input)?;
-    if backend
-        .required_commands()
-        .iter()
-        .all(|cmd| command_available(OsStr::new(cmd)))
+    if (backend == NativeBackend::Dnf && command_available(OsStr::new("dnf5")))
+        || backend
+            .required_commands()
+            .iter()
+            .all(|cmd| command_available(OsStr::new(cmd)))
     {
         Ok(backend)
     } else {

@@ -52,14 +52,7 @@ fn collect_update_rows_with_resolver(
     let mut rows = String::new();
     let mut seen = HashSet::new();
     if let Some(native) = native.filter(|backend| *backend != NativeBackend::Pacman) {
-        let backend = match native {
-            NativeBackend::Pacman => BackendId::Pacman,
-            NativeBackend::Apt => BackendId::Apt,
-            NativeBackend::Dnf => BackendId::Dnf5,
-            NativeBackend::Zypper => BackendId::Zypper,
-            NativeBackend::Apk => BackendId::Apk,
-            NativeBackend::Xbps => BackendId::Xbps,
-        };
+        let backend = native.backend_id(|command| resolver.resolve(command).is_some());
         let registry = BackendRegistry::default();
         let provider = registry
             .backend(backend)
@@ -71,7 +64,10 @@ fn collect_update_rows_with_resolver(
                 &mut seen,
                 backend.as_str(),
                 "34",
-                package.native_key.as_str(),
+                package
+                    .display_name
+                    .as_deref()
+                    .unwrap_or(package.native_key.as_str()),
             );
         }
     }
@@ -96,6 +92,18 @@ fn collect_update_rows_with_resolver(
         let repo = scope.spawn(move || {
             checkupdates.and_then(|program| {
                 run_capture_path(&program, &[] as &[&str], true)
+                    .and_then(|output| {
+                        if output.status.success() || output.status.code() == Some(2) {
+                            Ok(output)
+                        } else {
+                            bail!(
+                                "checkupdates exited with {}: {}",
+                                output.status,
+                                output.stderr
+                            )
+                        }
+                    })
+                    .map_err(|error| eprintln!("update diagnostics: pacman: {error}"))
                     .ok()
                     .map(|output| output.stdout)
             })
@@ -103,6 +111,18 @@ fn collect_update_rows_with_resolver(
         let aur = scope.spawn(move || {
             helper.and_then(|program| {
                 run_capture_path(&program, &["-Qua"], true)
+                    .and_then(|output| {
+                        if output.status.success() {
+                            Ok(output)
+                        } else {
+                            bail!(
+                                "AUR provider exited with {}: {}",
+                                output.status,
+                                output.stderr
+                            )
+                        }
+                    })
+                    .map_err(|error| eprintln!("update diagnostics: aur: {error}"))
                     .ok()
                     .map(|output| output.stdout)
             })
@@ -114,6 +134,14 @@ fn collect_update_rows_with_resolver(
                     &["remote-ls", "--updates", "--columns=application,version"],
                     true,
                 )
+                .and_then(|output| {
+                    if output.status.success() {
+                        Ok(output)
+                    } else {
+                        bail!("flatpak exited with {}: {}", output.status, output.stderr)
+                    }
+                })
+                .map_err(|error| eprintln!("update diagnostics: flatpak: {error}"))
                 .ok()
                 .map(|output| output.stdout)
             })
@@ -154,6 +182,47 @@ fn collect_update_rows_with_resolver(
             "36",
             &output,
         );
+    }
+    let registry = BackendRegistry::default();
+    for (backend, command) in [
+        (BackendId::Snap, "snap"),
+        (BackendId::Brew, "brew"),
+        (BackendId::Nix, "nix"),
+    ] {
+        if resolver.resolve(OsStr::new(command)).is_none() {
+            continue;
+        }
+        let provider = registry
+            .backend(backend)
+            .context("optional update provider missing")?;
+        match provider.read(ReadOperation::Updates) {
+            Ok(updates) => {
+                for package in updates.packages {
+                    let key = format!(
+                        "{}:{}:{}",
+                        backend.as_str(),
+                        package.scope.as_str(),
+                        package.native_key
+                    );
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    if !rows.is_empty() {
+                        rows.push('\n');
+                    }
+                    rows.push_str(&format!(
+                        "\x1b[36m[{}]\x1b[0m\t{}\t{}",
+                        backend.as_str(),
+                        package.native_key,
+                        package
+                            .display_name
+                            .as_deref()
+                            .unwrap_or(package.native_key.as_str())
+                    ));
+                }
+            }
+            Err(error) => eprintln!("update diagnostics: {}: {error}", backend.as_str()),
+        }
     }
     Ok(rows)
 }
