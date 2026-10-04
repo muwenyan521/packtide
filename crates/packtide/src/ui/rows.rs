@@ -95,7 +95,11 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
         } else {
             String::new()
         };
-        write!(output, "\x1b[35m{:<16}\x1b[0m\t\x1b[1m{name}\x1b[0m", "aur")?;
+        write!(
+            output,
+            "PKG:aur\t\x1b[35m{:<16}\x1b[0m\t\x1b[1m{name}\x1b[0m",
+            "aur"
+        )?;
         output.write_all(&SPACES[..padding.min(SPACES.len())])?;
         output.write_all(b"\t-                   ")?;
         output.write_all(installed.as_bytes())?;
@@ -447,6 +451,7 @@ mod tests {
         let plain = super::super::strip_ansi(&rows);
         assert_eq!(plain.matches("\ttool").count(), 1);
         assert_eq!(plain.matches("\tbash").count(), 1);
+        assert!(plain.contains("PKG:aur\t"));
         assert!(!rows.contains("invalid"));
     }
 }
