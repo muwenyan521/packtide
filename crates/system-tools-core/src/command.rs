@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 const PRIVILEGED_COMMAND_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -241,6 +241,41 @@ where
     Ok(status)
 }
 
+pub fn run_status_path_timeout<S>(
+    program: &Path,
+    args: &[S],
+    timeout: Duration,
+) -> Result<ExitStatus>
+where
+    S: AsRef<OsStr>,
+{
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to execute {}", program.display()))?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            report_debug_timing(program.as_os_str(), started, status);
+            if !status.success() {
+                bail!("{} exited with {status}", program.display());
+            }
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "{} timed out after {}s",
+                program.display(),
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 pub fn run_command_plan(plan: &crate::CommandPlan) -> Result<ExitStatus> {
     match plan.privilege {
         crate::CommandPrivilege::User => {
@@ -265,6 +300,24 @@ where
     S: AsRef<OsStr>,
 {
     PrivilegeRunner::system()?.run(args)
+}
+
+pub fn run_privileged_quiet<S>(args: &[S]) -> Result<ExitStatus>
+where
+    S: AsRef<OsStr>,
+{
+    let runner = PrivilegeRunner::system()?;
+    let mut command = Command::new(&runner.sudo_path);
+    command
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    scrub_privileged_environment(&mut command);
+    let status = command.status().context("failed to execute sudo")?;
+    if !status.success() {
+        bail!("sudo exited with {status}");
+    }
+    Ok(status)
 }
 
 pub fn run_status_no_args<S>(program: S) -> Result<ExitStatus>

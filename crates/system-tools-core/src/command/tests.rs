@@ -1,6 +1,6 @@
 use super::{
     PRIVILEGED_COMMAND_PATH, PrivilegeRunner, debug_timing_line, debug_timings_enabled,
-    run_command_plan,
+    run_command_plan, run_status_path_timeout,
 };
 use crate::{CommandPlan, CommandPrivilege};
 use std::fs;
@@ -41,6 +41,25 @@ fn debug_timing_line_contains_only_command_timing_fields() {
         line,
         "command_timing program=fake-tool elapsed_ms=17 status=exit status: 0"
     );
+}
+
+#[test]
+fn bounded_status_runner_kills_a_stalled_optional_update() {
+    let fixture = std::env::temp_dir().join(format!(
+        "system-tools-core-timeout-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&fixture).expect("create timeout fixture");
+    let program = fixture.join("slow");
+    write_executable(&program, "#!/bin/sh\nsleep 2\n");
+    let error = run_status_path_timeout(&program, &[] as &[&str], Duration::from_millis(20))
+        .expect_err("slow command must time out");
+    assert!(error.to_string().contains("timed out"));
+    fs::remove_dir_all(fixture).expect("remove timeout fixture");
 }
 
 #[test]

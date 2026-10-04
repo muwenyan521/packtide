@@ -5,8 +5,8 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::{
-    NativeBackend, command_exists, detect_native_backend_from_file, run_capture, run_privileged,
-    run_status_no_args,
+    NativeBackend, command_exists, detect_native_backend_from_file, run_capture,
+    run_privileged_quiet, run_status_no_args,
 };
 
 use crate::messages::{Lang, log_info, msg, msg_with};
@@ -46,7 +46,7 @@ pub(crate) fn check_age(lang: Lang) -> Result<()> {
             if let Some(mirror) = mirror.filter(|path| path.is_file()) {
                 run_status_no_args(mirror.as_os_str())?;
             } else if command_exists("reflector") {
-                run_privileged(&[
+                run_privileged_quiet(&[
                     "reflector",
                     "--protocol",
                     "https",

@@ -471,6 +471,8 @@ fn install_fake_picker_covers_preview_accept_and_transaction_argv() {
     );
     let args = fs::read_to_string(fzf_args).expect("read fake fzf argv");
     assert!(args.contains("--preview"));
+    assert!(args.contains("--with-nth"));
+    assert!(args.contains("2.."));
     assert!(args.contains("__preview install"));
     assert!(args.contains("--no-wrap"));
     assert!(args.contains("--ellipsis=..."));

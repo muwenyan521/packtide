@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::ffi::OsStr;
 use system_tools_core::{
     BackendId, ExecutableResolver, PackageUpgradePrivilege, package_upgrade_command,
-    run_package_keyring_update_with_resolver, run_package_upgrade, run_status_path,
+    run_package_keyring_update_with_resolver, run_package_upgrade, run_status_path_timeout,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,7 +114,7 @@ fn run_optional(backend: BackendId) -> Result<()> {
         BackendId::Nix => &["profile", "upgrade", ".*"],
         _ => return Ok(()),
     };
-    run_status_path(&path, args)?;
+    run_status_path_timeout(&path, args, std::time::Duration::from_secs(180))?;
     Ok(())
 }
 

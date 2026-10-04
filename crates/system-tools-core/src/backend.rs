@@ -1163,9 +1163,18 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
             "--cached",
             "--columns=application,origin,name,installation",
         ],
-    )?;
-    let contents = if cached.status.success() && !cached.stdout.trim().is_empty() {
-        cached.stdout
+    );
+    let contents = if let Ok(cached) = cached {
+        if cached.status.success() && !cached.stdout.trim().is_empty() {
+            cached.stdout
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    let contents = if !contents.is_empty() {
+        contents
     } else {
         let live = run_backend_command(
             backend,

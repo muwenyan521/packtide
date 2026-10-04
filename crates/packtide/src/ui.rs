@@ -1,6 +1,6 @@
 mod colors;
 mod fzf;
-mod preview;
+pub(crate) mod preview;
 mod rows;
 
 pub(crate) const NO_SELECTION: &str = "No packages selected.";

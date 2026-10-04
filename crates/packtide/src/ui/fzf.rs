@@ -258,6 +258,8 @@ fn select_rows_with_input(
         "\t",
         "--nth",
         "2",
+        "--with-nth",
+        "2..",
         "--id-nth",
         "1,2",
         "--track",

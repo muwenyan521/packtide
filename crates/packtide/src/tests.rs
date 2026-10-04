@@ -131,11 +131,11 @@ fn renders_package_records_with_ui_owned_ansi_and_columns() {
     assert_eq!(
         rows,
         format!(
-            "\x1b[34mcore            \x1b[0m\t\x1b[1mbash\x1b[0m                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m{}\x1b[0m",
+            "PKG:core\t\x1b[34mcore            \x1b[0m\t\x1b[1mbash\x1b[0m                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m{}\x1b[0m",
             crate::locale::text(crate::locale::current(), "package.installed", &[])
         )
     );
-    assert_eq!(strip_ansi(&rows).split('\t').count(), 3);
+    assert_eq!(strip_ansi(&rows).split('\t').count(), 4);
 }
 
 #[test]

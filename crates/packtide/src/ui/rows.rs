@@ -138,15 +138,30 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
         localized_source = crate::locale::source_label(crate::locale::current(), record.source);
         localized_source.as_str()
     };
+    let internal = match record.source {
+        PackageSource::Flatpak if record.repository.as_deref() == Some("flatpak@system") => {
+            "FLTK:flatpak@system".to_owned()
+        }
+        PackageSource::Flatpak => match &record.listing {
+            PackageListing::Flatpak { origin, .. } if !origin.is_empty() => {
+                format!("FLTK:{origin}")
+            }
+            _ => "FLTK:flatpak".to_owned(),
+        },
+        PackageSource::Aur => "PKG:aur".to_owned(),
+        PackageSource::Pacman => {
+            format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
+        }
+    };
     let source_padding = 16usize.saturating_sub(UnicodeWidthStr::width(source));
     let name_padding = 35usize.saturating_sub(UnicodeWidthStr::width(record.name.as_str()));
     if mode == PackageListMode::Install {
-        write!(output, "\x1b[{color}m{source}")?;
+        write!(output, "{internal}\t\x1b[{color}m{source}")?;
         output.write_all(&SPACES[..source_padding.min(SPACES.len())])?;
         output.write_all(b"\x1b[0m")?;
         write!(output, "\t\x1b[1m{}\x1b[0m", record.name)?;
     } else {
-        write!(output, "\x1b[{color}m{source}")?;
+        write!(output, "{internal}\t\x1b[{color}m{source}")?;
         output.write_all(&SPACES[..source_padding.min(SPACES.len())])?;
         output.write_all(b"\x1b[0m")?;
         write!(output, "\t{}", record.name)?;
@@ -175,18 +190,60 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
 pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     let stripped = strip_ansi(row);
     let clean = strip_outer_quotes(&stripped);
-    let (source_label, name) = if let Some((source, rest)) = clean.split_once('\t') {
-        (source.trim(), rest.split_whitespace().next()?)
+    let (source_label, name, hidden) = if let Some((source, rest)) = clean.split_once('\t') {
+        let hidden = source.trim().starts_with("PKG:") || source.trim().starts_with("FLTK:");
+        if hidden {
+            let mut fields = rest.split('\t');
+            let visible = fields.next()?.trim();
+            let name = fields
+                .next()
+                .and_then(|value| value.split_whitespace().next())
+                .unwrap_or_else(|| visible.split_whitespace().next().unwrap_or_default());
+            (source.trim(), name, true)
+        } else {
+            (source.trim(), rest.split_whitespace().next()?, false)
+        }
     } else {
         let mut fields = clean.split_whitespace();
-        (fields.next()?, fields.next()?)
+        (fields.next()?, fields.next()?, false)
     };
     if name.is_empty() {
         return None;
     }
-    let (source_label, scope) = source_label
-        .split_once('@')
-        .unwrap_or((source_label, "user"));
+    let (source_label, scope) = if hidden {
+        match source_label.strip_prefix("FLTK:") {
+            Some(origin) => (
+                "flatpak",
+                if origin == "flatpak@system" {
+                    "system"
+                } else {
+                    "user"
+                },
+            ),
+            None => (
+                source_label.strip_prefix("PKG:").unwrap_or(source_label),
+                "user",
+            ),
+        }
+    } else {
+        source_label
+            .split_once('@')
+            .unwrap_or((source_label, "user"))
+    };
+    if hidden && source_label == "aur" {
+        return Some(PackageRow {
+            source: PackageSource::Aur,
+            repository: Some("aur".to_owned()),
+            name: name.to_owned(),
+        });
+    }
+    if hidden && source_label != "flatpak" {
+        return Some(PackageRow {
+            source: PackageSource::Pacman,
+            repository: Some(source_label.to_owned()),
+            name: name.to_owned(),
+        });
+    }
     let (source, repository) = match PackageSource::parse(source_label).or_else(|| {
         [
             PackageSource::Pacman,
@@ -284,6 +341,34 @@ mod tests {
     }
 
     #[test]
+    fn hidden_source_fields_round_trip_without_becoming_visible_identity() {
+        assert_eq!(
+            parse_package_row("PKG:core\tcore\t\x1b[1mbash\x1b[0m\t5.3-1"),
+            Some(PackageRow {
+                source: PackageSource::Pacman,
+                repository: Some("core".to_owned()),
+                name: "bash".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_package_row("PKG:aur\taur\ttool\t-"),
+            Some(PackageRow {
+                source: PackageSource::Aur,
+                repository: Some("aur".to_owned()),
+                name: "tool".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_package_row("FLTK:flathub\tFlatpak\torg.example.App\tDemo"),
+            Some(PackageRow {
+                source: PackageSource::Flatpak,
+                repository: None,
+                name: "org.example.App".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn pads_cjk_names_by_terminal_columns() {
         let record = PackageRecord {
             source: PackageSource::Flatpak,
@@ -294,7 +379,7 @@ mod tests {
         };
         let row = super::render_package_rows(&[record], super::PackageListMode::Remove);
         let clean = super::super::strip_ansi(&row);
-        let name_column = clean.split('\t').nth(1).expect("name column");
+        let name_column = clean.split('\t').nth(2).expect("name column");
         assert_eq!(UnicodeWidthStr::width(name_column), 35);
     }
 

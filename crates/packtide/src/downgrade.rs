@@ -70,8 +70,8 @@ pub fn run(query: &[String]) -> Result<()> {
         "--info=inline",
     ]);
     let preview = format!(
-        "{} __preview downgrade \"{{}}\"",
-        current_executable()?.display()
+        "bash -c 'exec {} __preview downgrade \"$1\"' packtide-preview \"{{}}\"",
+        crate::ui::preview::shell_quote(current_executable()?.to_string_lossy().as_ref())
     );
     args.extend(["--preview", preview.as_str()]);
     let query_value = query.join(" ");
