@@ -38,17 +38,13 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     } else {
         parsed_identity.backend
     };
-    let identity_key = if matches!(kind, "remove" | "downgrade")
-        && parsed_identity.backend != BackendId::Flatpak
-    {
-        format!("detail-qi:{display_package}")
-    } else if matches!(kind, "install" | "downgrade")
-        && let Some(repository) = parsed.as_ref().and_then(|row| row.repository.as_deref())
-    {
-        format!("{repository}/{display_package}")
-    } else {
-        parsed_identity.native_key.as_str().to_owned()
-    };
+    let identity_key = detail_identity_key(
+        kind,
+        backend_id,
+        display_package,
+        parsed_identity.native_key.as_str(),
+        parsed.as_ref().and_then(|row| row.repository.as_deref()),
+    );
     let identity_kind = if backend_id == parsed_identity.backend {
         parsed_identity.kind
     } else {
@@ -128,6 +124,30 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn detail_identity_key(
+    kind: &str,
+    backend: BackendId,
+    display_package: &str,
+    native_key: &str,
+    repository: Option<&str>,
+) -> String {
+    if matches!(kind, "remove" | "downgrade")
+        && matches!(
+            backend,
+            BackendId::Pacman | BackendId::Paru | BackendId::Yay
+        )
+    {
+        format!("detail-qi:{display_package}")
+    } else if matches!(kind, "install" | "downgrade") {
+        repository.map_or_else(
+            || native_key.to_owned(),
+            |repository| format!("{repository}/{display_package}"),
+        )
+    } else {
+        native_key.to_owned()
+    }
 }
 
 fn strip_outer_quotes(value: &str) -> &str {
@@ -230,7 +250,8 @@ pub(crate) fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{colorize_metadata, preview_header, preview_version};
+    use super::{colorize_metadata, detail_identity_key, preview_header, preview_version};
+    use system_tools_core::BackendId;
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -275,5 +296,17 @@ mod tests {
     fn preview_version_ignores_shell_quotes_ansi_and_install_badge() {
         let row = "'\x1b[34mcore            \x1b[0m\tbash                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m✔ [Installed]\x1b[0m'";
         assert_eq!(preview_version(row), "5.3-1");
+    }
+
+    #[test]
+    fn native_remove_details_keep_typed_identity_keys() {
+        assert_eq!(
+            detail_identity_key("remove", BackendId::Apt, "vim", "vim:amd64", None),
+            "vim:amd64"
+        );
+        assert_eq!(
+            detail_identity_key("remove", BackendId::Nix, "hello", "hello-2.12", None),
+            "hello-2.12"
+        );
     }
 }

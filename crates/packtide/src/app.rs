@@ -2,11 +2,11 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use std::env;
 use std::ffi::OsStr;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use system_tools_core::ExecutableResolver;
-use system_tools_core::{BackendId, NativeBackend, detect_native_backend_from_file};
+use system_tools_core::{BackendId, NativeBackend, backend_from_os_release};
 
 use crate::cli::{Cli, CommandLine, CompatibilityRoute, compatibility_route};
 use crate::commands::sysup;
@@ -39,15 +39,10 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
 }
 
 pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
-    if ExecutableResolver::from_path(env::var_os("PATH").as_deref())
-        .resolve(OsStr::new("pacman"))
-        .is_none()
-    {
-        anyhow::bail!(
-            "required command 'pacman' is unavailable for {capability}; install it and retry"
-        );
-    }
-    let native = detect_native_backend_from_file("/etc/os-release").map_err(|error| {
+    let os_release = fs::read_to_string("/etc/os-release").map_err(|error| {
+        anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
+    })?;
+    let native = backend_from_os_release(&os_release).map_err(|error| {
         anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
     })?;
     let backend = match native {
