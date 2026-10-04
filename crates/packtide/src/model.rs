@@ -11,7 +11,7 @@ pub(crate) struct PackageUpdate {
     pub(crate) display: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PackageRecord {
     pub(crate) backend: BackendId,
     pub(crate) kind: PackageKind,
@@ -96,7 +96,7 @@ impl PackageRecord {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PackageListing {
     Version(String),
     Flatpak { app_name: String, origin: String },

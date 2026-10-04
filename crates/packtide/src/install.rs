@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
+use std::collections::HashMap;
 use std::env;
 use std::time::{Instant, SystemTime};
-use system_tools_core::TransactionAction;
+use system_tools_core::{BackendId, TransactionAction};
 
 use crate::source_metadata::{PackageRoute, package_route};
-use crate::sources::install_rows;
-use crate::transaction::execute_package;
+use crate::sources::{install_catalog_for_backends, install_rows};
+use crate::transaction::{execute_native, execute_package};
 use crate::ui::{parse_package_identity, parse_package_row, write_install_catalog};
 
 pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
@@ -17,19 +18,36 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         "the package installation picker",
         false,
     )?;
+    let native = crate::app::native_backend("capability.install")?;
+    if native != system_tools_core::BackendId::Pacman {
+        let records = install_catalog_for_backends(native, refresh, query)?;
+        let rows = crate::ui::render_package_rows(&records, crate::ui::PackageListMode::Install);
+        if env::var_os("PACKTIDE_INSTALL_LIST_ONLY").is_some() {
+            println!("{rows}");
+            return Ok(());
+        }
+        let selected = crate::ui::select_rows("native", false, rows, query, Some(started_at))?;
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        let mut grouped: HashMap<BackendId, Vec<system_tools_core::PackageIdentity>> =
+            HashMap::new();
+        for row in selected.lines() {
+            if let Some(identity) = parse_package_identity(row) {
+                grouped.entry(identity.backend).or_default().push(identity);
+            }
+        }
+        for packages in grouped.values() {
+            execute_native(TransactionAction::Install, packages)?;
+        }
+        return Ok(());
+    }
     let pacman = crate::app::require_command_for(
         "pacman",
         "capability.catalog",
         "the package catalog lookup",
         false,
     )?;
-    let native = crate::app::native_backend("capability.install")?;
-    if native != system_tools_core::BackendId::Pacman {
-        anyhow::bail!(
-            "packtide install picker currently supports Pacman/AUR on Arch; detected native backend {}",
-            native.as_str()
-        );
-    }
     let helper = crate::app::package_helper_for("package installation")?;
     if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(

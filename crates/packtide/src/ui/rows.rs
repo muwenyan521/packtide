@@ -584,6 +584,7 @@ mod tests {
             official_names: HashSet::new(),
             aur_names: "bash\ntool\ntool\n../invalid\n".to_owned(),
             installed: HashSet::new(),
+            records: Vec::new(),
         };
         let mut bytes = Vec::new();
         super::write_install_catalog(&catalog, &mut bytes).expect("render catalog");
