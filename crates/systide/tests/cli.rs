@@ -49,6 +49,30 @@ fn optional_update_list_preserves_providers_and_reports_failures() {
     );
 }
 
+#[test]
+fn list_data_native_provider_failure_is_not_hidden_by_optional_rows() {
+    let fixture = Fixture::new();
+    fixture.write_executable("pacman", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable(
+        "checkupdates",
+        "#!/bin/sh\nprintf 'native source unavailable\\n' >&2\nexit 1\n",
+    );
+    fixture.write_executable(
+        "snap",
+        "#!/bin/sh\nprintf 'Name Version Rev Publisher Notes\\nhello-world 2 2 acme -\\n'\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_systide"))
+        .arg("--list-data")
+        .env("PATH", fixture.path())
+        .output()
+        .expect("run list-data with a failing native provider");
+
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("checkupdates exited"), "{error}");
+}
+
 impl Fixture {
     fn new() -> Self {
         let nonce = SystemTime::now()
@@ -112,6 +136,23 @@ fn list_data_missing_native_tools_is_not_successful() {
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("native backend detection failed"), "{error}");
+}
+
+#[test]
+fn list_data_empty_sources_is_not_successful() {
+    let fixture = Fixture::new();
+    fixture.write_executable("pacman", "#!/bin/sh\nexit 0\n");
+    fixture.write_executable("checkupdates", "#!/bin/sh\nexit 2\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_systide"))
+        .arg("--list-data")
+        .env("PATH", fixture.path())
+        .output()
+        .expect("run list-data with empty update sources");
+
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("no update sources returned data"), "{error}");
 }
 
 #[test]

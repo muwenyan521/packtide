@@ -98,24 +98,22 @@ fn collect_update_rows_with_resolver(
         .flatten();
     let flatpak = resolver.resolve(OsStr::new("flatpak"));
     let (repo, aur, flatpak) = std::thread::scope(|scope| -> Result<_> {
-        let repo = scope.spawn(move || {
-            checkupdates.and_then(|program| {
-                run_capture_path(&program, &[] as &[&str], true)
-                    .and_then(|output| {
-                        if output.status.success() || output.status.code() == Some(2) {
-                            Ok(output)
-                        } else {
-                            bail!(
-                                "checkupdates exited with {}: {}",
-                                output.status,
-                                output.stderr
-                            )
-                        }
-                    })
-                    .map_err(|error| eprintln!("update diagnostics: pacman: {error}"))
-                    .ok()
-                    .map(|output| output.stdout)
-            })
+        let repo = scope.spawn(move || -> Result<Option<String>> {
+            let Some(program) = checkupdates else {
+                return Ok(None);
+            };
+            let output = run_capture_path(&program, &[] as &[&str], true).and_then(|output| {
+                if output.status.success() || output.status.code() == Some(2) {
+                    Ok(output)
+                } else {
+                    bail!(
+                        "checkupdates exited with {}: {}",
+                        output.status,
+                        output.stderr
+                    )
+                }
+            })?;
+            Ok(Some(output.stdout))
         });
         let aur = scope.spawn(move || {
             helper.and_then(|program| {
@@ -157,7 +155,7 @@ fn collect_update_rows_with_resolver(
         });
         Ok((
             repo.join()
-                .map_err(|_| anyhow::anyhow!("repository update query thread panicked"))?,
+                .map_err(|_| anyhow::anyhow!("repository update query thread panicked"))??,
             aur.join()
                 .map_err(|_| anyhow::anyhow!("AUR update query thread panicked"))?,
             flatpak
