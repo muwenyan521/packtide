@@ -78,7 +78,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         Vec::new();
     for row in selected.lines() {
         let Some(_package) = parse_package_row(row) else {
-            continue;
+            anyhow::bail!("selected row has invalid package row");
         };
         let Some(mut identity) = parse_package_identity(row) else {
             anyhow::bail!(
@@ -168,27 +168,18 @@ fn rows(
     native: BackendId,
 ) -> Result<Vec<crate::model::PackageRecord>> {
     if native != BackendId::Pacman {
-        let registry = BackendRegistry::default();
-        let provider = registry
-            .backend(native)
-            .ok_or_else(|| anyhow::anyhow!("native backend is not registered"))?;
-        let installed = provider
-            .read(ReadOperation::Installed)
-            .map_err(|e| anyhow::anyhow!("native installed query failed: {e}"))?;
-        return Ok(installed
-            .packages
-            .into_iter()
-            .map(|package| {
-                let name = package.native_key.as_str().to_owned();
-                PackageRecord::from_identity(
-                    package,
-                    None,
-                    name,
-                    PackageListing::Version(String::new()),
-                    true,
-                )
-            })
-            .collect());
+        let mut ids = vec![native];
+        for id in [
+            BackendId::Flatpak,
+            BackendId::Snap,
+            BackendId::Brew,
+            BackendId::Nix,
+        ] {
+            if command_exists(id.as_str()) {
+                ids.push(id);
+            }
+        }
+        return installed_rows_for_backends(&ids, true);
     }
     let pacman = pacman.expect("pacman path for Arch removal");
     let helper = helper.expect("AUR helper for Arch removal");
@@ -252,6 +243,64 @@ fn rows(
             PackageRecord::from_identity(package, repository, name, listing, true)
         }));
     }
+    let optional = [BackendId::Snap, BackendId::Brew, BackendId::Nix]
+        .into_iter()
+        .filter(|id| command_exists(id.as_str()))
+        .collect::<Vec<_>>();
+    if !optional.is_empty() {
+        records.extend(installed_rows_for_backends(&optional, false)?);
+    }
     let _ = pacman;
+    Ok(records)
+}
+
+fn installed_rows_for_backends(
+    backends: &[BackendId],
+    native_required: bool,
+) -> Result<Vec<PackageRecord>> {
+    let registry = BackendRegistry::default();
+    let mut records = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, backend_id) in backends.iter().copied().enumerate() {
+        let Some(provider) = registry.backend(backend_id) else {
+            if native_required && index == 0 {
+                anyhow::bail!("native backend {} is not registered", backend_id.as_str());
+            }
+            continue;
+        };
+        let result = provider.read(ReadOperation::Installed);
+        let installed = match result {
+            Ok(value) => value,
+            Err(error) if !native_required || index > 0 => {
+                diagnostics.push(format!("{}: {error}", backend_id.as_str()));
+                continue;
+            }
+            Err(error) => anyhow::bail!("native installed query failed: {error}"),
+        };
+        records.extend(installed.packages.into_iter().map(|package| {
+            let name = package
+                .display_name
+                .clone()
+                .unwrap_or_else(|| package.native_key.as_str().to_owned());
+            let listing = if backend_id == BackendId::Flatpak {
+                PackageListing::Flatpak {
+                    app_name: package.display_name.clone().unwrap_or_else(|| name.clone()),
+                    origin: package.origin.clone().unwrap_or_default(),
+                }
+            } else {
+                PackageListing::Version(String::new())
+            };
+            let repository = (backend_id == BackendId::Flatpak
+                && package.scope == PackageScope::System)
+                .then(|| "flatpak@system".to_owned());
+            PackageRecord::from_identity(package, repository, name, listing, true)
+        }));
+    }
+    if !diagnostics.is_empty() {
+        eprintln!(
+            "optional package providers unavailable: {}",
+            diagnostics.join("; ")
+        );
+    }
     Ok(records)
 }
