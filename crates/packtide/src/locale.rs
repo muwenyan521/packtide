@@ -64,6 +64,7 @@ pub(crate) fn source_label(lang: Lang, source: system_tools_core::PackageSource)
         system_tools_core::PackageSource::Pacman => "source.pacman",
         system_tools_core::PackageSource::Aur => "source.aur",
         system_tools_core::PackageSource::Flatpak => "source.flatpak",
+        _ => "backend.native",
     };
     text(lang, key, &[])
 }

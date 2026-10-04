@@ -70,6 +70,7 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
                 PackageKind::Aur,
             ),
             PackageSource::Flatpak => (BackendId::Flatpak, PackageKind::Flatpak),
+            _ => continue,
         };
         let scope = if package.source == PackageSource::Pacman
             || (package.source == PackageSource::Flatpak

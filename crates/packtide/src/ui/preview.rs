@@ -53,6 +53,14 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
             }
         }
         Some(PackageSource::Flatpak) => BackendId::Flatpak,
+        Some(PackageSource::Apt) => BackendId::Apt,
+        Some(PackageSource::Dnf) => BackendId::Dnf5,
+        Some(PackageSource::Zypper) => BackendId::Zypper,
+        Some(PackageSource::Apk) => BackendId::Apk,
+        Some(PackageSource::Xbps) => BackendId::Xbps,
+        Some(PackageSource::Snap) => BackendId::Snap,
+        Some(PackageSource::Brew) => BackendId::Brew,
+        Some(PackageSource::Nix) => BackendId::Nix,
         None => BackendId::Pacman,
     };
     let identity_key = if matches!(kind, "remove" | "downgrade")
@@ -113,6 +121,7 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
         Some(PackageSource::Pacman) => "source.pacman",
         Some(PackageSource::Aur) => "source.aur",
         Some(PackageSource::Flatpak) => "source.flatpak",
+        Some(_) => "backend.native",
         None => "source.pacman",
     };
     let source_label = crate::locale::text(lang, source_key, &[]);

@@ -3,6 +3,14 @@ pub enum PackageSource {
     Pacman,
     Aur,
     Flatpak,
+    Apt,
+    Dnf,
+    Zypper,
+    Apk,
+    Xbps,
+    Snap,
+    Brew,
+    Nix,
 }
 
 impl PackageSource {
@@ -11,6 +19,14 @@ impl PackageSource {
             Self::Pacman => "pacman",
             Self::Aur => "aur",
             Self::Flatpak => "flatpak",
+            Self::Apt => "apt",
+            Self::Dnf => "dnf",
+            Self::Zypper => "zypper",
+            Self::Apk => "apk",
+            Self::Xbps => "xbps",
+            Self::Snap => "snap",
+            Self::Brew => "brew",
+            Self::Nix => "nix",
         }
     }
 
@@ -19,6 +35,14 @@ impl PackageSource {
             "pacman" => Some(Self::Pacman),
             "aur" => Some(Self::Aur),
             "flatpak" => Some(Self::Flatpak),
+            "apt" => Some(Self::Apt),
+            "dnf" => Some(Self::Dnf),
+            "zypper" => Some(Self::Zypper),
+            "apk" => Some(Self::Apk),
+            "xbps" => Some(Self::Xbps),
+            "snap" => Some(Self::Snap),
+            "brew" => Some(Self::Brew),
+            "nix" => Some(Self::Nix),
             _ => None,
         }
     }

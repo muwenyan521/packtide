@@ -187,6 +187,11 @@ fn hidden_source_token(record: &PackageRecord) -> String {
         PackageSource::Pacman => {
             format!("PKG:{}", record.repository.as_deref().unwrap_or("pacman"))
         }
+        source => format!(
+            "{}:{}",
+            source.as_str().to_ascii_uppercase(),
+            record.repository.as_deref().unwrap_or(source.as_str())
+        ),
     }
 }
 
@@ -194,7 +199,10 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     let stripped = strip_ansi(row);
     let clean = strip_outer_quotes(&stripped);
     let (source_label, name, hidden) = if let Some((source, rest)) = clean.split_once('\t') {
-        let hidden = source.trim().starts_with("PKG:") || source.trim().starts_with("FLTK:");
+        let hidden = source
+            .trim()
+            .split_once(':')
+            .is_some_and(|(prefix, _)| prefix.chars().all(|c| c.is_ascii_uppercase()));
         if hidden {
             let mut fields = rest.split('\t');
             let visible = fields.next()?.trim();
@@ -213,6 +221,7 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
     if name.is_empty() {
         return None;
     }
+    let raw_source_label = source_label;
     let (source_label, scope) = if hidden {
         match source_label.strip_prefix("FLTK:") {
             Some(origin) => (
@@ -223,10 +232,13 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
                     "user"
                 },
             ),
-            None => (
-                source_label.strip_prefix("PKG:").unwrap_or(source_label),
-                "user",
-            ),
+            None => {
+                let source = source_label
+                    .split_once(':')
+                    .map(|(_, value)| value)
+                    .unwrap_or(source_label);
+                (source, "user")
+            }
         }
     } else {
         source_label
@@ -237,6 +249,27 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
         return Some(PackageRow {
             source: PackageSource::Aur,
             repository: Some("aur".to_owned()),
+            name: name.to_owned(),
+        });
+    }
+    if hidden && let Some((prefix, repository)) = raw_source_label.split_once(':') {
+        let source = match prefix {
+            "FLTK" => PackageSource::Flatpak,
+            "PKG" if repository == "aur" => PackageSource::Aur,
+            "PKG" => PackageSource::Pacman,
+            "APT" => PackageSource::Apt,
+            "DNF" => PackageSource::Dnf,
+            "ZYPPER" => PackageSource::Zypper,
+            "APK" => PackageSource::Apk,
+            "XBPS" => PackageSource::Xbps,
+            "SNAP" => PackageSource::Snap,
+            "BREW" => PackageSource::Brew,
+            "NIX" => PackageSource::Nix,
+            _ => return None,
+        };
+        return Some(PackageRow {
+            source,
+            repository: (source != PackageSource::Flatpak).then(|| repository.to_owned()),
             name: name.to_owned(),
         });
     }
@@ -367,6 +400,14 @@ mod tests {
                 source: PackageSource::Flatpak,
                 repository: None,
                 name: "org.example.App".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_package_row("APT:main\tAPT\tbash\t5.2"),
+            Some(PackageRow {
+                source: PackageSource::Apt,
+                repository: Some("main".to_owned()),
+                name: "bash".to_owned(),
             })
         );
     }

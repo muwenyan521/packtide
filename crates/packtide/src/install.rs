@@ -90,6 +90,10 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
                 "{}: Flatpak rows are not valid in the package installer",
                 crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
             ),
+            _ => bail!(
+                "{}: this package source is not available in the current picker",
+                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
+            ),
         }
     }
     if !repo.is_empty() {
