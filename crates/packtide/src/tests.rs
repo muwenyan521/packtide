@@ -5,7 +5,7 @@ use super::model::{UpdateSource, parse_cached_updates, parse_flatpak, parse_upda
 use super::sources::{parse_install_rows, parse_remove_rows, valid_package_name};
 use super::ui::{PackageListMode, render_package_rows, strip_ansi};
 use clap::Parser;
-use system_tools_core::PackageSource;
+use system_tools_core::{BackendId, PackageScope, PackageSource};
 
 #[test]
 fn parses_repository_update_lines_without_losing_raw_text() {
@@ -29,8 +29,14 @@ fn parses_flatpak_application_and_version() {
 
 #[test]
 fn cache_round_trip_preserves_display_text() {
-    let updates = parse_cached_updates("pacman\tlinux 6.12 -> 6.13\naur\ttool-git 1 -> 2");
+    let updates = parse_cached_updates(
+        "pacman\tsystem\tlinux\tpacman\tlinux\tlinux 6.12 -> 6.13\n\
+         aur\ttool-git 1 -> 2",
+    );
     assert_eq!(updates[0].display, "linux 6.12 -> 6.13");
+    assert_eq!(updates[0].identity.backend, BackendId::Pacman);
+    assert_eq!(updates[0].identity.scope, PackageScope::System);
+    assert_eq!(updates[0].identity.native_key.as_str(), "linux");
     assert_eq!(updates[1].source, UpdateSource::Aur);
     assert!(parse_cached_updates("core\tbash 5.2 -> 5.3").is_empty());
 }

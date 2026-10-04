@@ -6,9 +6,49 @@ use system_tools_core::{
 #[derive(Debug)]
 pub(crate) struct PackageUpdate {
     pub(crate) source: UpdateSource,
+    pub(crate) identity: PackageIdentity,
     pub(crate) name: String,
     pub(crate) version: Option<String>,
     pub(crate) display: String,
+}
+
+impl PackageUpdate {
+    pub(crate) fn legacy(
+        source: PackageSource,
+        name: String,
+        version: Option<String>,
+        display: String,
+    ) -> Self {
+        let identity = PackageIdentity::new(
+            source.backend_for_source(),
+            source.default_kind(),
+            source.default_scope(),
+            NativePackageKey::new(name.clone()).expect("legacy update package name"),
+        );
+        Self {
+            source,
+            identity,
+            name,
+            version,
+            display,
+        }
+    }
+
+    pub(crate) fn from_identity(
+        source: PackageSource,
+        identity: PackageIdentity,
+        name: String,
+        version: Option<String>,
+        display: String,
+    ) -> Self {
+        Self {
+            source,
+            identity,
+            name,
+            version,
+            display,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,12 +147,13 @@ pub(crate) fn parse_updates(source: PackageSource, text: &str) -> Vec<PackageUpd
     text.lines()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-            Some(PackageUpdate {
+            let name = parts.next()?.to_owned();
+            Some(PackageUpdate::legacy(
                 source,
-                name: parts.next()?.to_owned(),
-                version: parts.next_back().map(str::to_owned),
-                display: line.to_owned(),
-            })
+                name,
+                parts.next_back().map(str::to_owned),
+                line.to_owned(),
+            ))
         })
         .collect()
 }
@@ -122,12 +163,13 @@ pub(crate) fn parse_flatpak(text: &str) -> Vec<PackageUpdate> {
     text.lines()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-            Some(PackageUpdate {
-                source: PackageSource::Flatpak,
-                name: parts.next()?.to_owned(),
-                version: parts.next().map(str::to_owned),
-                display: line.to_owned(),
-            })
+            let name = parts.next()?.to_owned();
+            Some(PackageUpdate::legacy(
+                PackageSource::Flatpak,
+                name,
+                parts.next().map(str::to_owned),
+                line.to_owned(),
+            ))
         })
         .collect()
 }
@@ -136,14 +178,40 @@ pub(crate) fn parse_cached_updates(contents: &str) -> Vec<PackageUpdate> {
     contents
         .lines()
         .filter_map(|line| {
+            let mut fields = line.splitn(6, '\t');
+            let first = fields.next()?;
+            if let (Some(scope), Some(native_key), Some(source), Some(name), Some(display)) = (
+                fields.next().and_then(PackageScope::parse),
+                fields
+                    .next()
+                    .and_then(|value| NativePackageKey::new(value).ok()),
+                fields.next().and_then(PackageSource::parse),
+                fields.next(),
+                fields.next(),
+            ) {
+                let backend = BackendId::parse(first)?;
+                let identity =
+                    PackageIdentity::new(backend, backend.default_kind(), scope, native_key);
+                let mut parts = display.split_whitespace();
+                return Some(PackageUpdate::from_identity(
+                    source,
+                    identity,
+                    name.to_owned(),
+                    parts.next_back().map(str::to_owned),
+                    display.to_owned(),
+                ));
+            }
+
             let (source, display) = line.split_once('\t')?;
             let mut parts = display.split_whitespace();
-            Some(PackageUpdate {
-                source: PackageSource::parse(source)?,
-                name: parts.next()?.to_owned(),
-                version: parts.next_back().map(str::to_owned),
-                display: display.to_owned(),
-            })
+            let source = PackageSource::parse(source)?;
+            let name = parts.next()?.to_owned();
+            Some(PackageUpdate::legacy(
+                source,
+                name,
+                parts.next_back().map(str::to_owned),
+                display.to_owned(),
+            ))
         })
         .collect()
 }
@@ -175,25 +243,45 @@ pub(crate) fn render_update_rows(updates: &[PackageUpdate]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{PackageUpdate, render_update_rows};
-    use system_tools_core::PackageSource;
+    use system_tools_core::{
+        BackendId, NativePackageKey, PackageIdentity, PackageKind, PackageScope, PackageSource,
+    };
 
     #[test]
     fn update_rows_use_localized_source_labels() {
         let rows = render_update_rows(&[
             PackageUpdate {
                 source: PackageSource::Pacman,
+                identity: PackageIdentity::new(
+                    BackendId::Pacman,
+                    PackageKind::System,
+                    PackageScope::System,
+                    NativePackageKey::new("bash").unwrap(),
+                ),
                 name: "bash".to_owned(),
                 version: Some("5.3".to_owned()),
                 display: "bash 5.3".to_owned(),
             },
             PackageUpdate {
                 source: PackageSource::Aur,
+                identity: PackageIdentity::new(
+                    BackendId::Paru,
+                    PackageKind::Aur,
+                    PackageScope::User,
+                    NativePackageKey::new("tool").unwrap(),
+                ),
                 name: "tool".to_owned(),
                 version: Some("1.0".to_owned()),
                 display: "tool 1.0".to_owned(),
             },
             PackageUpdate {
                 source: PackageSource::Flatpak,
+                identity: PackageIdentity::new(
+                    BackendId::Flatpak,
+                    PackageKind::Flatpak,
+                    PackageScope::User,
+                    NativePackageKey::new("org.example.App").unwrap(),
+                ),
                 name: "org.example.App".to_owned(),
                 version: Some("2.0".to_owned()),
                 display: "org.example.App 2.0".to_owned(),

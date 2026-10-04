@@ -151,7 +151,13 @@ fn deduplicate_updates(updates: Vec<PackageUpdate>) -> Vec<PackageUpdate> {
     let mut seen = HashSet::new();
     updates
         .into_iter()
-        .filter(|item| seen.insert((item.source, item.name.clone())))
+        .filter(|item| {
+            seen.insert((
+                item.identity.backend,
+                item.identity.scope,
+                item.identity.native_key.clone(),
+            ))
+        })
         .collect()
 }
 
@@ -197,14 +203,30 @@ impl UpdateCache {
         let mut contents = String::with_capacity(
             updates
                 .iter()
-                .map(|item| item.display.len() + item.source.as_str().len() + 1)
+                .map(|item| {
+                    item.identity.backend.as_str().len()
+                        + item.identity.scope.as_str().len()
+                        + item.identity.native_key.as_str().len()
+                        + item.source.as_str().len()
+                        + item.name.len()
+                        + item.display.len()
+                        + 5
+                })
                 .sum(),
         );
         for (index, item) in updates.iter().enumerate() {
             if index > 0 {
                 contents.push('\n');
             }
+            contents.push_str(item.identity.backend.as_str());
+            contents.push('\t');
+            contents.push_str(item.identity.scope.as_str());
+            contents.push('\t');
+            contents.push_str(item.identity.native_key.as_str());
+            contents.push('\t');
             contents.push_str(item.source.as_str());
+            contents.push('\t');
+            contents.push_str(&item.name);
             contents.push('\t');
             contents.push_str(&item.display);
         }
@@ -239,11 +261,9 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
             .backend(BackendId::Pacman)?
             .read(ReadOperation::Updates)
             .ok()?;
-        updates.extend(typed.packages.into_iter().map(|package| PackageUpdate {
-            source: PackageSource::Pacman,
-            name: package.native_key.as_str().to_owned(),
-            version: None,
-            display: package.native_key.as_str().to_owned(),
+        updates.extend(typed.packages.into_iter().map(|package| {
+            let name = package.native_key.as_str().to_owned();
+            PackageUpdate::from_identity(PackageSource::Pacman, package, name.clone(), None, name)
         }));
         debug_source_timing("repo_updates", started);
     }
@@ -262,16 +282,13 @@ fn query_arch_updates() -> Option<Vec<PackageUpdate>> {
             .read(ReadOperation::Updates)
             .ok()?;
         updates.extend(typed.packages.into_iter().map(|package| {
-            PackageUpdate {
-                source: PackageSource::Aur,
-                name: package
-                    .native_key
-                    .as_str()
-                    .trim_start_matches("aur/")
-                    .to_owned(),
-                version: None,
-                display: package.native_key.as_str().to_owned(),
-            }
+            let display = package.native_key.as_str().to_owned();
+            let name = package
+                .native_key
+                .as_str()
+                .trim_start_matches("aur/")
+                .to_owned();
+            PackageUpdate::from_identity(PackageSource::Aur, package, name, None, display)
         }));
         debug_source_timing("aur_updates", started);
     }
@@ -294,18 +311,17 @@ fn query_native_updates() -> Vec<PackageUpdate> {
             result
                 .packages
                 .into_iter()
-                .map(|package| PackageUpdate {
-                    source: match backend {
+                .map(|package| {
+                    let source = match backend {
                         BackendId::Apt => PackageSource::Apt,
                         BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
                         BackendId::Zypper => PackageSource::Zypper,
                         BackendId::Apk => PackageSource::Apk,
                         BackendId::Xbps => PackageSource::Xbps,
                         _ => PackageSource::Pacman,
-                    },
-                    name: package.native_key.as_str().to_owned(),
-                    version: None,
-                    display: package.native_key.as_str().to_owned(),
+                    };
+                    let name = package.native_key.as_str().to_owned();
+                    PackageUpdate::from_identity(source, package, name.clone(), None, name)
                 })
                 .collect()
         })
@@ -330,11 +346,15 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
             typed
                 .packages
                 .into_iter()
-                .map(|package| PackageUpdate {
-                    source: PackageSource::Flatpak,
-                    name: package.native_key.as_str().to_owned(),
-                    version: None,
-                    display: package.native_key.as_str().to_owned(),
+                .map(|package| {
+                    let name = package.native_key.as_str().to_owned();
+                    PackageUpdate::from_identity(
+                        PackageSource::Flatpak,
+                        package,
+                        name.clone(),
+                        None,
+                        name,
+                    )
                 })
                 .collect()
         })
@@ -358,17 +378,10 @@ fn query_optional_updates() -> Vec<PackageUpdate> {
         let provider = registry.backend(backend)?;
         let result = provider.read(ReadOperation::Updates).ok()?;
         debug_source_timing(source.as_str(), started);
-        Some(
-            result
-                .packages
-                .into_iter()
-                .map(move |package| PackageUpdate {
-                    source,
-                    name: package.native_key.as_str().to_owned(),
-                    version: None,
-                    display: package.native_key.as_str().to_owned(),
-                }),
-        )
+        Some(result.packages.into_iter().map(move |package| {
+            let name = package.native_key.as_str().to_owned();
+            PackageUpdate::from_identity(source, package, name.clone(), None, name)
+        }))
     })
     .flatten()
     .collect()
@@ -377,6 +390,7 @@ fn query_optional_updates() -> Vec<PackageUpdate> {
 #[cfg(test)]
 mod native_update_tests {
     use super::*;
+    use system_tools_core::{NativePackageKey, PackageIdentity, PackageScope};
 
     #[test]
     fn native_backend_sources_map_to_stable_picker_sources() {
@@ -397,5 +411,40 @@ mod native_update_tests {
             };
             assert_eq!(mapped, source);
         }
+    }
+
+    #[test]
+    fn deduplication_keeps_same_name_across_backend_and_scope() {
+        let update = |backend, scope, source| {
+            PackageUpdate::from_identity(
+                source,
+                PackageIdentity::new(
+                    backend,
+                    backend.default_kind(),
+                    scope,
+                    NativePackageKey::new("shared-name").unwrap(),
+                ),
+                "shared-name".to_owned(),
+                None,
+                "shared-name".to_owned(),
+            )
+        };
+        let updates = deduplicate_updates(vec![
+            update(
+                BackendId::Pacman,
+                PackageScope::System,
+                PackageSource::Pacman,
+            ),
+            update(BackendId::Paru, PackageScope::User, PackageSource::Aur),
+            update(
+                BackendId::Pacman,
+                PackageScope::System,
+                PackageSource::Pacman,
+            ),
+        ]);
+
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].identity.backend, BackendId::Pacman);
+        assert_eq!(updates[1].identity.backend, BackendId::Paru);
     }
 }
