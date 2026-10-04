@@ -29,10 +29,13 @@ environment variables before invoking `sudo`.
 
 ## User-facing behavior
 
-`packtide` retains its Arch-compatible interactive surface. `packtide remove`,
-`check-updates`, `mirror-update`, and `downgrade` have Pacman/AUR/Flatpak behavior and do
-not automatically become generic APT/DNF/Zypper/APK/XBPS pickers. `packtide sysup` only
-forwards to `systide`; it does not maintain another update implementation.
+`packtide` retains its Arch-compatible interactive surface while routing detected non-Arch
+native installs, removals, and update reads through the typed backend registry. `mirror-update`,
+`downgrade`, and the Arch `packtide sysup` compatibility bridge remain Arch-specific; they do
+not become generic APT/DNF/Zypper/APK/XBPS commands. Optional Snap/Brew/Nix rows are available
+in the non-Arch native picker when the provider command is present, but are not added to the
+Arch picker. `packtide sysup` only forwards to `systide`; it does not maintain another update
+implementation.
 
 `systide` detects one native backend, runs its upgrade, and then attempts present optional
 backends in this order: Flatpak, Snap, Brew, Nix. It records each step, continues after an
@@ -46,8 +49,8 @@ remove, upgrade, downgrade, and system-upgrade capabilities. Callers must handle
 system-scoped and reject local `.snap`/`--dangerous` sources. Brew casks are not a Linux
 runtime target; the Brew lane validates formula operations only. Nix transactions are
 profile-scoped and do not mutate the system store. The Arch picker remains limited to
-Pacman/AUR/Flatpak; detection or matrix coverage for another backend does not imply picker
-support.
+Pacman/AUR/Flatpak; detection or matrix coverage for another backend does not imply support for
+an unrelated Arch-only command.
 
 ## Picker UI contract
 
@@ -80,18 +83,18 @@ for Snap. Unsupported capabilities fail before command execution.
 ## Verification status
 
 The following status is the recorded state for the current source line (`HEAD`
-`c1689444f0916843ca3bd86fcf273091dde09b92`). Evidence files are observations, not replacement
+`644b104816b1c6711daa0985a5898e2dd0b46c05`). Evidence files are observations, not replacement
 implementations or plan checkboxes.
 
 | Area | Status | Evidence and boundary |
 | --- | --- | --- |
 | Stage 5.1-5.3 update/list contract | PASS | `.omo/evidence/stage5-gate-review-current.md` and `.omo/evidence/stage5-contract-final.md`: typed current/candidate values, native-first/optional-after-native outcomes, DNF generation dispatch, provider failures, and empty `--list-data` failure. |
-| Core fake command integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt` and `.omo/evidence/stage6-hook-proof-20261005.log`: `backend_fake_commands`, optional provider fake PATH, locale/argv/status/stderr, and privilege assertions. |
-| Packtide/systide fake integration | PASS | The same Stage 6 evidence records `packtide` optional provider rows/preview identity and `systide` optional ordering/failure continuation tests; current HEAD includes commits `54888e4`, `34a3288`, and `c168944`. |
+| Core fake command integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`, `.omo/evidence/stage6-hook-proof-20261005.log`, and `cargo test -p system-tools-core --test native_fake_path`: `backend_fake_commands`, native APT/DNF5/Zypper/APK/XBPS fake PATH, optional provider fake PATH, locale/argv/status/stderr, and privilege assertions. |
+| Packtide/systide fake integration | PASS | The same Stage 6 evidence records `packtide` optional provider rows/preview identity and `systide` optional ordering/failure continuation tests; current HEAD includes commits `54888e4`, `34a3288`, `c168944`, and `53f1688`. |
 | Transaction generation and privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt` and `.omo/evidence/transaction-gate-live.txt`: exact DNF4/DNF5 executable selection, elevated Snap refresh, typed plans, environment scrubbing, and 106 core tests. |
 | Stage 6 automated convergence | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`: focused core/packtide/systide suites, formatting, and diff checks passed. |
 | Stage 6 real UI flow | PARTIAL | `.omo/evidence/phase6-systide-ui-smoke-20261001.md` and its PTY captures prove English/Chinese cancellation and 80x24 layout. No real privileged package transaction, mirror-warning, or partial-upgrade flow was run. |
-| Disposable matrix | ENVIRONMENT-BLOCKED | Locked image metadata and cleanup are recorded in `.omo/evidence/wave1-final-matrix/`; the functional run `.omo/evidence/wave1-todo2-current/all.jsonl` records repository/registry TLS failures, Snap cloud-image download failure, and non-zero aggregate status. These failures remain failures, not passes. |
+| Disposable matrix | ENVIRONMENT-BLOCKED | Locked image metadata and cleanup are recorded in `.omo/evidence/wave1-final-matrix/`; the functional run `.omo/evidence/wave1-todo2-network-retry/all-2.jsonl` records repository/registry TLS failures, Snap cloud-image download failure, and non-zero aggregate status. These failures remain failures, not passes. |
 
 The UI and fake-command evidence does not authorize destructive host transactions. A full matrix
 claim requires a network-capable environment with the locked images/repositories and a working

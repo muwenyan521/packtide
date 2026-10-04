@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use system_tools_core::{
-    BackendId, BuiltinBackend, ExecutableResolver, NativePackageKey,
-    PackageIdentity, PackageKind, PackageScope, PackageBackend, ReadOperation, WriteOperation,
+    BackendId, BuiltinBackend, ExecutableResolver, NativePackageKey, PackageBackend,
+    PackageIdentity, PackageKind, PackageScope, ReadOperation, WriteOperation,
 };
 
 struct Fixture(PathBuf);
@@ -71,8 +71,15 @@ fn native_backend_fake_path_catalog_and_install_plans() {
 
     let fixture = Fixture::new();
     for command in [
-        "apt-cache", "apt-get", "dpkg-query", "dnf5", "zypper", "apk", "xbps-query",
-        "xbps-install", "xbps-remove",
+        "apt-cache",
+        "apt-get",
+        "dpkg-query",
+        "dnf5",
+        "zypper",
+        "apk",
+        "xbps-query",
+        "xbps-install",
+        "xbps-remove",
     ] {
         fixture.command(command);
     }
@@ -83,8 +90,7 @@ fn native_backend_fake_path_catalog_and_install_plans() {
         .env("NATIVE_FAKE_CHILD", "1")
         .env(
             "FIXTURE_ROOT",
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/package-managers/fixtures"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/package-managers/fixtures"),
         )
         .env("PATH", fixture.path())
         .output()
@@ -122,7 +128,12 @@ fn run_child() {
         );
         let package = identity(backend, expected);
         let plan = provider
-            .write_with_resolver(WriteOperation::Install { packages: vec![package] }, &resolver)
+            .write_with_resolver(
+                WriteOperation::Install {
+                    packages: vec![package],
+                },
+                &resolver,
+            )
             .unwrap_or_else(|error| panic!("{backend:?} install plan failed: {error}"));
         assert_eq!(plan.backend, backend);
         assert!(

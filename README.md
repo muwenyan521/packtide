@@ -10,7 +10,7 @@
 ## 第一轮范围
 
 - `packtide` 默认行为等价于原 `pac`：安装 TUI；`packtide <query>` 预填查询。
-- `packtide remove` 覆盖原 `pacr` 的 Pacman/AUR/Flatpak 卸载主流程。
+- `packtide remove` 覆盖原 `pacr` 的 Pacman/AUR/Flatpak 卸载主流程，并按发行版路由 native backend。
 - `packtide check-updates`、`mirror-update` 和 `downgrade` 覆盖原本地工具入口。
 - `systide` 是唯一的系统更新编排入口，负责新闻、镜像、快照、keyring、包升级、Flatpak、GRUB 和 Waybar 收尾。
 - `packtide sysup` 仅作为旧脚本兼容桥，将参数结构化转发给同目录或 PATH 中的 `systide`；它不再维护第二套系统更新逻辑。
@@ -43,30 +43,31 @@ locale 环境变量。新增语言只需增加对应资源文件并接入 loader
 | 后端 | 包类型与 scope | `systide` 更新 | `packtide` 交互路径 | 矩阵验证 |
 | --- | --- | --- | --- | --- |
 | Pacman | system | `pacman -Su`（特权）及 keyring | install/remove/check-updates/downgrade | Arch smoke（宿主） |
-| APT | system | `apt-get upgrade -y`（特权） | core contract；无 Arch picker | Debian、Ubuntu container |
-| DNF5 | system | `dnf5 upgrade -y`（特权） | core contract；无 Arch picker | Fedora container |
-| DNF4 | system | `dnf upgrade -y`（特权） | core contract；无 Arch picker | Rocky、Alma container |
-| Zypper | system | `zypper update -y`（特权） | core contract；无 Arch picker | openSUSE container |
-| APK | system | `apk upgrade`（特权） | core contract；无 Arch picker | Alpine container |
-| XBPS | system | `xbps-install -Su`（特权） | core contract；无 Arch picker | Void container |
+| APT | system | `apt-get upgrade -y`（特权） | native install/remove/check-updates；无 Arch picker | Debian、Ubuntu container |
+| DNF5 | system | `dnf5 upgrade -y`（特权） | native install/remove/check-updates；无 Arch picker | Fedora container |
+| DNF4 | system | `dnf upgrade -y`（特权） | native install/remove/check-updates；无 Arch picker | Rocky、Alma container |
+| Zypper | system | `zypper update -y`（特权） | native install/remove/check-updates；无 Arch picker | openSUSE container |
+| APK | system | `apk upgrade`（特权） | native install/remove/check-updates；无 Arch picker | Alpine container |
+| XBPS | system | `xbps-install -Su`（特权） | native install/remove/check-updates；无 Arch picker | Void container |
 | Paru / Yay | AUR user | 不由 `systide` 自动执行 | Arch AUR install/remove/check-updates/downgrade | fixture/typed contract |
-| Flatpak | user 或 system | `flatpak update -y`（存在时） | Flatpak install/remove/update | fixture/typed contract |
-| Snap | system | `snap refresh`（存在时） | 只提供 typed backend；不在 Arch picker 中 | Ubuntu QEMU VM（见下文） |
-| Brew | Linuxbrew profile | `brew upgrade`（存在时） | 只提供 typed backend；不在 Arch picker 中 | pinned Homebrew container |
-| Nix | profile | `nix profile upgrade .*`（存在时） | 只提供 typed backend；不操作 system store | pinned Nix container |
+| Flatpak | user 或 system | `flatpak update -y`（存在时） | Flatpak install/remove/update；按 scope 分组 | fixture/typed contract |
+| Snap | system | `snap refresh`（存在时） | non-Arch native picker；不在 Arch picker 中 | Ubuntu QEMU VM（见下文） |
+| Brew | Linuxbrew profile | `brew upgrade`（存在时） | non-Arch native picker；formula only | pinned Homebrew container |
+| Nix | profile | `nix profile upgrade .*`（存在时） | non-Arch native picker；profile only | pinned Nix container |
 
 `systide` 先更新已检测到的原生后端，再按 PATH 中实际存在的命令尝试 Flatpak、Snap、
 Brew、Nix；可选步骤的失败会保留在结果中并使最终退出码为非零。AUR helper 不属于
 `systide` 的可选更新列表。`packtide` 的 `mirror-update`、`downgrade`、`sysup` 仍是
-Pacman/Arch 兼容入口，不能把它们当作 APT、DNF、Zypper、APK 或 XBPS 的通用命令。
+Pacman/Arch 兼容入口；非 Arch 的 install/remove/check-updates 走对应 native backend，
+不会把另一个后端当作替代品。
 
 读取、搜索、installed、details 和 updates 是后端 capability 的独立边界；不支持的
 操作返回 typed `UnsupportedCapability`。这意味着“能被矩阵探测”不等于“所有
 `packtide` picker 命令都可用”。Snap 只接受 system scope 的商店包，不接受本地
 `.snap`/`--dangerous` 安装源；Brew 在 Linux 仅支持 formula，不支持 cask；Nix 只
-操作 profile，不操作 system store。除 Pacman/AUR/Flatpak 已接入 `packtide` 交互
-路径外，其余后端的读取或写入能力必须由调用方按 capability 检查，不能把后端名
-当作功能承诺。
+操作 profile，不操作 system store。Arch picker 仍只接入 Pacman/AUR/Flatpak；非 Arch
+native picker 的读取和写入能力必须由调用方按 capability 检查，不能把后端名当作超出
+矩阵所列路径的功能承诺。
 
 完整的后端、scope、命令和验证 lane 见 [`docs/package-manager-support.md`](docs/package-manager-support.md)。
 
@@ -165,18 +166,18 @@ Release 构建固定使用 workspace `profile.release`（thin LTO、8 个 codege
 
 ## 验证状态（2026-10-05）
 
-当前源码 HEAD 为 `c1689444f0916843ca3bd86fcf273091dde09b92`。阶段状态只按可重放工件记录，
+当前源码 HEAD 为 `644b104816b1c6711daa0985a5898e2dd0b46c05`。阶段状态只按可重放工件记录，
 不等同于把规划文件中的复选框改成完成：
 
 | 范围 | 状态 | 可复查工件与边界 |
 | --- | --- | --- |
-| 阶段 5.1-5.3 | PASS | `.omo/evidence/stage5-gate-review-current.md`、`stage5-contract-final.md`：typed update identity/current/candidate、native-first/optional-after-native、optional diagnostics/non-zero、DNF4/DNF5 dispatch、空 `--list-data` 失败。 |
-| Core fake integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`、`stage6-hook-proof-20261005.log`：每个 backend 的 typed install/remove/upgrade plan，fake argv/locale/status/stderr/privilege，以及 optional provider fake PATH。 |
-| Packtide/systide fake integration | PASS | 同一 Stage 6 证据覆盖 Snap/Brew/Nix update rows、hidden identity preview、optional failure 后继续，以及缺失 optional skip/多 provider failure。 |
-| Transaction generation/privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt`、`transaction-gate-live.txt`：Dnf5 使用 `dnf5`、Dnf4 使用 `dnf`，Snap refresh 为 elevated，system write 清理 loader 环境并通过 privilege runner。 |
+| 阶段 5.1-5.3 | PASS | `.omo/evidence/stage5-gate-review-current.md`、`.omo/evidence/stage5-contract-final.md`：typed update identity/current/candidate、native-first/optional-after-native、optional diagnostics/non-zero、DNF4/DNF5 dispatch、空 `--list-data` 失败。 |
+| Core fake integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`、`.omo/evidence/stage6-hook-proof-20261005.log`、`cargo test -p system-tools-core --test native_fake_path`：每个 backend 的 typed install/remove/upgrade plan，fake argv/locale/status/stderr/privilege，以及 native/optional provider fake PATH。 |
+| Packtide/systide fake integration | PASS | 同一 Stage 6 证据覆盖 Snap/Brew/Nix update rows、hidden identity preview、optional failure 后继续，以及缺失 optional skip/多 provider failure；`native_fake_path` 补齐 APT/DNF5/Zypper/APK/XBPS catalog/install path。 |
+| Transaction generation/privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt`、`.omo/evidence/transaction-gate-live.txt`：Dnf5 使用 `dnf5`、Dnf4 使用 `dnf`，Snap refresh 为 elevated，system write 清理 loader 环境并通过 privilege runner。 |
 | 阶段 6 自动化测试 | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`：core/packtide/systide focused suites、fmt 和 diff check 通过。 |
 | 阶段 6 真实 UI/PTY | PARTIAL | `.omo/evidence/phase6-systide-ui-smoke-20261001.md` 及其 transcript/capture：zh/en 取消、新闻数量、权限提示和 80x24 布局已观察；没有接受真实特权包事务，也没有宣称 mirror-warning/partial-upgrade 分支通过。 |
-| disposable package-manager matrix | ENVIRONMENT-BLOCKED | `.omo/evidence/wave1-final-matrix/` 记录锁定镜像 metadata/cleanup；`.omo/evidence/wave1-todo2-current/all.jsonl` 记录容器仓库/软件源 TLS、Snap cloud-image 下载阻塞及 aggregate non-zero。环境失败保持失败，不降级为 pass。 |
+| disposable package-manager matrix | ENVIRONMENT-BLOCKED | `.omo/evidence/wave1-final-matrix/` 记录锁定镜像 metadata/cleanup；`.omo/evidence/wave1-todo2-network-retry/all-2.jsonl` 记录容器仓库/软件源 TLS、Snap cloud-image 下载阻塞及 aggregate non-zero。环境失败保持失败，不降级为 pass。 |
 
 ### 环境阻塞说明
 
