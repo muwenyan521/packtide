@@ -341,3 +341,29 @@ fn query_flatpak_updates() -> Vec<PackageUpdate> {
     debug_source_timing("flatpak_updates", started);
     updates
 }
+
+#[cfg(test)]
+mod native_update_tests {
+    use super::*;
+
+    #[test]
+    fn native_backend_sources_map_to_stable_picker_sources() {
+        for (backend, source) in [
+            (BackendId::Apt, PackageSource::Apt),
+            (BackendId::Dnf5, PackageSource::Dnf),
+            (BackendId::Zypper, PackageSource::Zypper),
+            (BackendId::Apk, PackageSource::Apk),
+            (BackendId::Xbps, PackageSource::Xbps),
+        ] {
+            let mapped = match backend {
+                BackendId::Apt => PackageSource::Apt,
+                BackendId::Dnf5 | BackendId::Dnf4 => PackageSource::Dnf,
+                BackendId::Zypper => PackageSource::Zypper,
+                BackendId::Apk => PackageSource::Apk,
+                BackendId::Xbps => PackageSource::Xbps,
+                _ => PackageSource::Pacman,
+            };
+            assert_eq!(mapped, source);
+        }
+    }
+}
