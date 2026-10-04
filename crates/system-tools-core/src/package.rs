@@ -76,6 +76,31 @@ impl PackageSource {
         }
     }
 
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::Pacman => "source.pacman",
+            Self::Aur => "source.aur",
+            Self::Flatpak => "source.flatpak",
+            _ => "backend.native",
+        }
+    }
+
+    pub const fn color_code(self) -> &'static str {
+        match self {
+            Self::Pacman => "34",
+            Self::Aur => "35",
+            Self::Flatpak => "36",
+            Self::Apt => "32",
+            Self::Dnf => "33",
+            Self::Zypper => "31",
+            Self::Apk => "92",
+            Self::Xbps => "95",
+            Self::Snap => "93",
+            Self::Brew => "91",
+            Self::Nix => "96",
+        }
+    }
+
     pub fn hidden_token(self, detail: &str) -> String {
         format!("{}:{}", self.hidden_prefix(), detail)
     }

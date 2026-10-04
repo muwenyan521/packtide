@@ -1,19 +1,7 @@
 use system_tools_core::PackageSource;
 
 pub(crate) fn source_color(source: PackageSource) -> &'static str {
-    match source {
-        PackageSource::Pacman => "34",
-        PackageSource::Aur => "35",
-        PackageSource::Flatpak => "36",
-        PackageSource::Apt => "32",
-        PackageSource::Dnf => "33",
-        PackageSource::Zypper => "31",
-        PackageSource::Apk => "92",
-        PackageSource::Xbps => "95",
-        PackageSource::Snap => "93",
-        PackageSource::Brew => "91",
-        PackageSource::Nix => "96",
-    }
+    source.color_code()
 }
 
 pub(crate) fn strip_ansi(value: &str) -> String {

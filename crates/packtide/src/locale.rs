@@ -60,13 +60,7 @@ pub(crate) fn text(lang: Lang, key: &str, replacements: &[(&str, &str)]) -> Stri
 }
 
 pub(crate) fn source_label(lang: Lang, source: system_tools_core::PackageSource) -> String {
-    let key = match source {
-        system_tools_core::PackageSource::Pacman => "source.pacman",
-        system_tools_core::PackageSource::Aur => "source.aur",
-        system_tools_core::PackageSource::Flatpak => "source.flatpak",
-        _ => "backend.native",
-    };
-    text(lang, key, &[])
+    text(lang, source.label_key(), &[])
 }
 
 pub(crate) fn backend_label(lang: Lang, backend: system_tools_core::BackendId) -> String {
