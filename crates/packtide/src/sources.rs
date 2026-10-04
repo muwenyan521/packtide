@@ -35,7 +35,11 @@ pub(crate) fn install_rows_streaming(
     let typed_catalog = registry
         .backend(BackendId::Pacman)
         .ok_or_else(|| anyhow::anyhow!("backend pacman is not registered"))?
-        .read(ReadOperation::Catalog)
+        .read(if refresh {
+            ReadOperation::RefreshCatalog
+        } else {
+            ReadOperation::Catalog
+        })
         .map_err(|error| anyhow::anyhow!("pacman catalog exited: typed read failed: {error}"))?;
     let installed = Command::new(_pacman)
         .args(["-Qq"])

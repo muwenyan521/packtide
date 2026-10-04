@@ -250,6 +250,7 @@ impl CatalogStrategy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReadOperation {
     Catalog,
+    RefreshCatalog,
     Search {
         query: String,
     },
@@ -266,7 +267,7 @@ pub type ReadRequest = ReadOperation;
 impl ReadOperation {
     pub const fn capability(&self) -> CapabilitySet {
         match self {
-            Self::Catalog => CapabilitySet::CATALOG,
+            Self::Catalog | Self::RefreshCatalog => CapabilitySet::CATALOG,
             Self::Search { .. } => CapabilitySet::SEARCH,
             Self::Installed => CapabilitySet::INSTALLED,
             Self::Details { .. } => CapabilitySet::DETAILS,
@@ -463,8 +464,10 @@ pub trait PackageBackend {
                 capability,
             });
         }
-        if matches!(operation, ReadOperation::Catalog)
-            && self.catalog_strategy().is_query_required()
+        if matches!(
+            operation,
+            ReadOperation::Catalog | ReadOperation::RefreshCatalog
+        ) && self.catalog_strategy().is_query_required()
         {
             return Err(BackendError::QueryRequired { backend: self.id() });
         }
@@ -807,8 +810,10 @@ impl PackageBackend for BuiltinBackend {
                 capability,
             });
         }
-        if matches!(operation, ReadOperation::Catalog)
-            && self.catalog_strategy().is_query_required()
+        if matches!(
+            operation,
+            ReadOperation::Catalog | ReadOperation::RefreshCatalog
+        ) && self.catalog_strategy().is_query_required()
         {
             return Err(BackendError::QueryRequired { backend: self.id() });
         }
@@ -842,7 +847,7 @@ fn read_pacman(
     backend: BackendId,
 ) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     match operation {
-        ReadOperation::Catalog | ReadOperation::Search { .. } => {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
             let output =
                 run_backend_command(backend, "enumerate packages", &["--color=never", "-Sl"])?;
             if !output.status.success() {
@@ -938,7 +943,7 @@ fn read_aur(
 ) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     let helper = backend.as_str();
     match operation {
-        ReadOperation::Catalog | ReadOperation::Search { .. } => {
+        ReadOperation::Catalog | ReadOperation::RefreshCatalog | ReadOperation::Search { .. } => {
             let names = aur_names(backend)?;
             let query = match operation {
                 ReadOperation::Search { query } => Some(query),
@@ -1040,29 +1045,39 @@ fn read_flatpak(
     backend: BackendId,
 ) -> Result<(Vec<PackageIdentity>, CatalogStrategy, Option<ReadDetails>), BackendError> {
     match operation {
-        ReadOperation::Catalog | ReadOperation::Installed | ReadOperation::Search { .. } => {
-            let output = run_backend_command(
-                backend,
-                "list Flatpak applications",
-                &[
-                    "list",
-                    "--app",
-                    "--columns=application,origin,name,installation",
-                ],
-            )?;
-            if !output.status.success() {
-                return Err(command_failed(
+        ReadOperation::Catalog
+        | ReadOperation::RefreshCatalog
+        | ReadOperation::Installed
+        | ReadOperation::Search { .. } => {
+            let stdout = if matches!(
+                operation,
+                ReadOperation::Catalog | ReadOperation::RefreshCatalog
+            ) {
+                flatpak_catalog_output(backend, matches!(operation, ReadOperation::RefreshCatalog))?
+            } else {
+                let output = run_backend_command(
                     backend,
                     "list Flatpak applications",
-                    &output,
-                ));
-            }
+                    &[
+                        "list",
+                        "--app",
+                        "--columns=application,origin,name,installation",
+                    ],
+                )?;
+                if !output.status.success() {
+                    return Err(command_failed(
+                        backend,
+                        "list Flatpak applications",
+                        &output,
+                    ));
+                }
+                output.stdout
+            };
             let query = match operation {
                 ReadOperation::Search { query } => Some(query),
                 _ => None,
             };
-            let packages = output
-                .stdout
+            let packages = stdout
                 .lines()
                 .filter(|line| {
                     query
@@ -1122,6 +1137,61 @@ fn read_flatpak(
             Ok((packages, CatalogStrategy::Enumerated, None))
         }
     }
+}
+
+const FLATPAK_CATALOG_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, BackendError> {
+    let cache_dir = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .map(|path| path.join("packtide/flatpak"));
+    if !refresh
+        && let Some(cache) = cache_dir.as_ref()
+        && let Ok(store) = crate::CacheStore::new(cache.clone())
+        && let Ok(Some(contents)) = store.read_fresh("catalog", FLATPAK_CATALOG_TTL)
+    {
+        return Ok(contents);
+    }
+
+    let cached = run_backend_command(
+        backend,
+        "enumerate cached Flatpak applications",
+        &[
+            "remote-ls",
+            "--app",
+            "--cached",
+            "--columns=application,origin,name,installation",
+        ],
+    )?;
+    let contents = if cached.status.success() && !cached.stdout.trim().is_empty() {
+        cached.stdout
+    } else {
+        let live = run_backend_command(
+            backend,
+            "enumerate Flatpak applications",
+            &[
+                "remote-ls",
+                "--app",
+                "--columns=application,origin,name,installation",
+            ],
+        )?;
+        if !live.status.success() {
+            return Err(command_failed(
+                backend,
+                "enumerate Flatpak applications",
+                &live,
+            ));
+        }
+        live.stdout
+    };
+    if !contents.trim().is_empty()
+        && let Some(cache) = cache_dir
+        && let Ok(store) = crate::CacheStore::new(cache)
+    {
+        let _ = store.write_atomic("catalog", &contents);
+    }
+    Ok(contents)
 }
 
 fn identity_for(

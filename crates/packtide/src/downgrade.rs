@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -130,7 +130,7 @@ fn run_downgrade_transaction(program: &Path, command: &[String]) -> Result<()> {
     if let Some(program) = std::env::var_os("PACKTIDE_TEST_DOWNGRADE_BIN") {
         let status = Command::new(program).args(command).status()?;
         if !status.success() {
-            bail!("downgrade test transaction exited with {status}");
+            anyhow::bail!("downgrade test transaction exited with {status}");
         }
         return Ok(());
     }

@@ -21,6 +21,8 @@ const UNSAFE_ENVIRONMENT: &[&str] = &[
 
 fn scrub_privileged_environment(command: &mut Command) {
     command.env("PATH", PRIVILEGED_COMMAND_PATH);
+    command.env("LC_ALL", "C.UTF-8");
+    command.env_remove("LANGUAGE");
     for variable in UNSAFE_ENVIRONMENT {
         command.env_remove(variable);
     }

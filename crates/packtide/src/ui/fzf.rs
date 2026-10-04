@@ -284,7 +284,7 @@ fn select_rows_with_input(
         args.extend(["--bind", "alt-c:accept"]);
     }
     let preview = format!(
-        "{} __preview {mode} \"{{}}\"",
+        "bash -c 'exec {} __preview {mode} \"$1\"' packtide-preview \"{{}}\"",
         shell_quote(executable.to_string_lossy().as_ref()),
     );
     args.extend(["--preview", preview.as_str()]);
