@@ -151,6 +151,114 @@ esac
     );
 }
 
+fn expected_write_args(backend: BackendId, operation: &WriteOperation) -> Vec<&'static str> {
+    let (install, remove, upgrade) = match backend {
+        BackendId::Pacman | BackendId::Paru | BackendId::Yay => {
+            (vec!["-S", "PKG"], vec!["-Rns", "PKG"], vec!["-Su"])
+        }
+        BackendId::Apt => (
+            vec!["install", "PKG"],
+            vec!["remove", "PKG"],
+            vec!["full-upgrade"],
+        ),
+        BackendId::Dnf4 | BackendId::Dnf5 => (
+            vec!["install", "PKG"],
+            vec!["remove", "PKG"],
+            vec!["upgrade", "--refresh"],
+        ),
+        BackendId::Zypper => (
+            vec!["install", "PKG"],
+            vec!["remove", "PKG"],
+            vec!["update"],
+        ),
+        BackendId::Apk => (vec!["add", "PKG"], vec!["del", "PKG"], vec!["upgrade"]),
+        BackendId::Xbps => (vec!["-y", "PKG"], vec!["-y", "PKG"], vec!["-Su"]),
+        BackendId::Flatpak => (
+            vec!["install", "PKG"],
+            vec!["uninstall", "PKG"],
+            vec!["update"],
+        ),
+        BackendId::Snap => (
+            vec!["install", "PKG"],
+            vec!["remove", "PKG"],
+            vec!["refresh"],
+        ),
+        BackendId::Brew => (
+            vec!["install", "PKG"],
+            vec!["uninstall", "PKG"],
+            vec!["upgrade"],
+        ),
+        BackendId::Nix => (
+            vec!["profile", "install", "PKG"],
+            vec!["profile", "remove", "PKG"],
+            vec!["profile", "upgrade"],
+        ),
+    };
+    match operation {
+        WriteOperation::Install { .. } => install,
+        WriteOperation::Remove { .. } => remove,
+        WriteOperation::SystemUpgrade => upgrade,
+        WriteOperation::Upgrade { .. } | WriteOperation::Downgrade { .. } => upgrade,
+    }
+}
+
+fn assert_exact_write_plan(
+    backend: BackendId,
+    plan: &system_tools_core::TransactionPlan,
+    operation: &WriteOperation,
+    key: &str,
+) {
+    let expected: Vec<String> = if backend == BackendId::Nix {
+        let mut v = vec![
+            "--extra-experimental-features".into(),
+            "nix-command flakes".into(),
+        ];
+        v.extend(
+            expected_write_args(backend, operation)
+                .into_iter()
+                .map(|arg| {
+                    if arg == "PKG" {
+                        key.to_string()
+                    } else {
+                        arg.to_string()
+                    }
+                }),
+        );
+        v
+    } else if backend == BackendId::Snap && matches!(operation, WriteOperation::Install { .. }) {
+        let (name, channel) = key.split_once('@').unwrap();
+        vec![
+            "install".into(),
+            name.into(),
+            format!("--channel={}", channel.trim_end_matches("#strict")),
+        ]
+    } else if backend == BackendId::Snap && matches!(operation, WriteOperation::Remove { .. }) {
+        vec!["remove".into(), key.split('@').next().unwrap().into()]
+    } else {
+        expected_write_args(backend, operation)
+            .into_iter()
+            .map(|arg| {
+                if arg == "PKG" {
+                    key.to_string()
+                } else {
+                    arg.to_string()
+                }
+            })
+            .collect()
+    };
+    let actual: Vec<_> = plan
+        .command
+        .args
+        .iter()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
+    assert_eq!(actual, expected, "{backend:?} {operation:?} argv");
+    assert_eq!(
+        plan.command.locale.as_deref(),
+        Some(std::ffi::OsStr::new("C"))
+    );
+}
+
 fn run_child() {
     for backend in BackendId::ALL {
         let b = BuiltinBackend::new(backend);
@@ -159,7 +267,7 @@ fn run_child() {
             PackageIdentity::new(backend, kind, scope, NativePackageKey::new(key).unwrap());
         let plan = b
             .write(WriteOperation::Install {
-                packages: vec![identity],
+                packages: vec![identity.clone()],
             })
             .unwrap_or_else(|e| panic!("{backend:?} install plan: {e}"));
         assert_eq!(
@@ -174,6 +282,37 @@ fn run_child() {
                 CommandPrivilege::User
             }
         );
+        assert_exact_write_plan(
+            backend,
+            &plan,
+            &WriteOperation::Install {
+                packages: vec![identity.clone()],
+            },
+            key,
+        );
+        let mut write_operations = vec![WriteOperation::Remove {
+            packages: vec![identity.clone()],
+        }];
+        if !matches!(
+            backend,
+            BackendId::Flatpak | BackendId::Brew | BackendId::Nix
+        ) {
+            write_operations.push(WriteOperation::SystemUpgrade);
+        }
+        for operation in write_operations {
+            let write_plan = b
+                .write(operation.clone())
+                .unwrap_or_else(|e| panic!("{backend:?} {operation:?}: {e}"));
+            assert_exact_write_plan(backend, &write_plan, &operation, key);
+            assert_eq!(
+                write_plan.command.privilege,
+                if scope == PackageScope::System {
+                    CommandPrivilege::Elevated
+                } else {
+                    CommandPrivilege::User
+                }
+            );
+        }
         for operation in [
             ReadOperation::Catalog,
             ReadOperation::Search {
