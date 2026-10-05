@@ -83,13 +83,13 @@ for Snap. Unsupported capabilities fail before command execution.
 ## Verification status
 
 The following status is the recorded state for the current source line (`HEAD`
-`488eceb92e2a369504d5eecfd0fd31441a8153a2`). Evidence files are observations, not replacement
+`c0e64c8e68a1ffd69898b2c4672490685491ad36`). Evidence files are observations, not replacement
 implementations or plan checkboxes.
 
 | Area | Status | Evidence and boundary |
 | --- | --- | --- |
 | Stage 5.1-5.3 update/list contract | PASS | `.omo/evidence/stage5-gate-review-current.md` and `.omo/evidence/stage5-contract-final.md`: typed current/candidate values, native-first/optional-after-native outcomes, DNF generation dispatch, provider failures, and empty `--list-data` failure. |
-| Core fake command integration | PASS | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`, `.omo/evidence/stage6-hook-proof-20261005.log`, and `cargo test -p system-tools-core --test native_fake_path`: `backend_fake_commands`, native APT/DNF5/Zypper/APK/XBPS fake PATH, optional provider fake PATH, locale/argv/status/stderr, and privilege assertions. |
+| Core fake command integration | PARTIAL | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`, `.omo/evidence/stage6-hook-proof-20261005.log`, and `.omo/evidence/core-read-matrix-final.txt`: all backend/read operations run through fake dispatch, but exact per-backend argv, failure stderr, privilege and locale matrix coverage remains incomplete. |
 | Packtide/systide fake integration | PASS | The same Stage 6 evidence records `packtide` optional provider rows/preview identity and `systide` optional ordering/failure continuation tests; current HEAD includes commits `54888e4`, `34a3288`, `c168944`, and `53f1688`. |
 | Transaction generation and privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt` and `.omo/evidence/transaction-gate-live.txt`: exact DNF4/DNF5 executable selection, elevated Snap refresh, typed plans, environment scrubbing, and 106 core tests. |
 | Stage 6 automated convergence | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`: focused core/packtide/systide suites, formatting, and diff checks passed. |
