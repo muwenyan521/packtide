@@ -444,7 +444,7 @@ pub(crate) fn install_rows_streaming(
     } else {
         ReadOperation::Catalog
     };
-    let stream_cache_query = format!("arch-stream:{normalized_query}");
+    let stream_cache_query = format!("arch-stream:{}:{}", _pacman.display(), normalized_query);
     let cached_records = if !refresh && query_is_eligible(&normalized_query) {
         cache_store()
             .and_then(|store| {
@@ -498,31 +498,20 @@ pub(crate) fn install_rows_streaming(
             typed_catalog
                 .packages
                 .into_iter()
-                .map(|package| {
+                .filter_map(|package| {
                     let (repository, name) = package
                         .native_key
                         .as_str()
                         .split_once('/')
-                        .map(|(repo, name)| (repo.to_owned(), name.to_owned()))
-                        .unwrap_or_else(|| (String::new(), package.native_key.as_str().to_owned()));
+                        .map(|(repo, name)| (repo.to_owned(), name.to_owned()))?;
                     let installed_state = installed.contains(&name);
-                    if repository.is_empty() {
-                        PackageRecord::legacy(
-                            system_tools_core::PackageSource::Pacman,
-                            None,
-                            name,
-                            crate::model::PackageListing::Version("-".to_owned()),
-                            installed_state,
-                        )
-                    } else {
-                        PackageRecord::from_identity(
-                            package,
-                            Some(repository),
-                            name,
-                            crate::model::PackageListing::Version("-".to_owned()),
-                            installed_state,
-                        )
-                    }
+                    Some(PackageRecord::from_identity(
+                        package,
+                        Some(repository),
+                        name,
+                        crate::model::PackageListing::Version("-".to_owned()),
+                        installed_state,
+                    ))
                 })
                 .collect(),
             installed,
@@ -566,12 +555,29 @@ pub(crate) fn install_rows_streaming(
             .iter()
             .map(|package| package.native_key.as_str())
             .collect::<HashSet<_>>();
-        catalog.aur_names = catalog
+        let valid_names = catalog
             .aur_names
             .lines()
             .filter(|name| typed_aur_names.contains(*name))
-            .collect::<Vec<_>>()
-            .join("\n");
+            .map(str::to_owned)
+            .collect::<HashSet<_>>();
+        catalog.aur_names = valid_names.iter().cloned().collect::<Vec<_>>().join("\n");
+        for identity in typed_aur.packages {
+            if !retain_official {
+                continue;
+            }
+            let name = identity.native_key.as_str().to_owned();
+            if !valid_names.contains(&name) {
+                continue;
+            }
+            catalog.records.push(PackageRecord::from_identity(
+                identity,
+                Some("aur".to_owned()),
+                name.clone(),
+                crate::model::PackageListing::Version("-".to_owned()),
+                catalog.installed.contains(&name),
+            ));
+        }
     }
     if std::env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
         eprintln!(
