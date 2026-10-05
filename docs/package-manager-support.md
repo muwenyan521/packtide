@@ -83,7 +83,7 @@ for Snap. Unsupported capabilities fail before command execution.
 ## Verification status
 
 The following status is the recorded state for the current source line (`HEAD`
-`c0e64c8e68a1ffd69898b2c4672490685491ad36`). Evidence files are observations, not replacement
+`8e08f71a9e3b1b1fe49595daf418275b32d460fb`). Evidence files are observations, not replacement
 implementations or plan checkboxes.
 
 | Area | Status | Evidence and boundary |
