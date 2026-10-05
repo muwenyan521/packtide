@@ -77,6 +77,10 @@ fn core_read_matrix_fake_path_dispatches_every_backend_operation() {
 printf 'uid=%s lc_all=%s\n' "$(id -u)" "${LC_ALL-}" >> "$CORE_READ_MATRIX_LOG"
 for arg in "$@"; do printf 'arg=%s\n' "$arg" >> "$CORE_READ_MATRIX_LOG"; done
 case "${0##*/}" in
+  *) if [ "${CORE_READ_MATRIX_FAILURE-}" = 1 ]; then printf '%s stderr\n' "${0##*/}" >&2; exit 23; fi ;;
+esac
+printf 'cmd=%s args=%s\n' "${0##*/}" "$*" >> "$CORE_READ_MATRIX_LOG"
+case "${0##*/}" in
   pacman|paru|yay) case "$*" in *-Qm*) printf 'hello-aur 1.0\n' ;; *-Q*) printf 'bash 5.2\n' ;; *-Qua*) printf 'bash 5.3\n' ;; *) printf 'core/bash 5.2\n' ;; esac ;;
   checkupdates) printf 'bash 5.3\n' ;;
   apt-cache) cat "$CORE_READ_FIXTURES/apt/catalog.deb822" ;;
@@ -148,6 +152,139 @@ esac
     assert!(
         calls.lines().any(|line| line.contains("lc_all=C")),
         "fake commands did not receive LC_ALL=C: {calls}"
+    );
+    for expected in expected_read_argv() {
+        assert!(
+            calls.lines().any(|line| line == expected),
+            "missing exact read argv {expected:?}; calls:\n{calls}"
+        );
+    }
+}
+
+fn expected_read_argv() -> Vec<&'static str> {
+    vec![
+        "cmd=pacman args=--color=never -Sl",
+        "cmd=pacman args=--color=never -Q",
+        "cmd=pacman args=--color=always -Si bash",
+        "cmd=checkupdates args=",
+        "cmd=paru args=-Sl",
+        "cmd=paru args=--color=always -Si hello-aur",
+        "cmd=paru args=-Qua",
+        "cmd=yay args=-Sl",
+        "cmd=yay args=--color=always -Si hello-aur",
+        "cmd=yay args=-Qua",
+        "cmd=apt-cache args=dumpavail",
+        "cmd=apt-cache args=show --no-all-versions bash",
+        "cmd=dpkg-query args=-W --showformat=${Package}\\t${Version}\\t${Architecture}\\t${Status}\\n",
+        "cmd=apt-get args=--just-print --simulate upgrade",
+        "cmd=dnf5 args=list --json",
+        "cmd=dnf5 args=list --installed --json",
+        "cmd=dnf5 args=info bash",
+        "cmd=dnf5 args=list --upgrades --json",
+        "cmd=dnf args=repoquery --info bash",
+        "cmd=zypper args=--xmlout search -s -t package",
+        "cmd=zypper args=--xmlout search -s -t package bash",
+        "cmd=zypper args=--xmlout search -s -i -t package",
+        "cmd=zypper args=--xmlout info bash",
+        "cmd=zypper args=--xmlout list-updates",
+        "cmd=apk args=search --no-cache *",
+        "cmd=apk args=search --no-cache bash",
+        "cmd=apk args=info --installed",
+        "cmd=apk args=info bash",
+        "cmd=apk args=version --available",
+        "cmd=xbps-query args=-Rs .",
+        "cmd=xbps-query args=-Rs bash",
+        "cmd=xbps-query args=-l",
+        "cmd=xbps-query args=-S bash",
+        "cmd=xbps-query args=-u",
+        "cmd=flatpak args=remote-ls --app --cached --columns=application,origin,name,installation",
+        "cmd=flatpak args=list --app --columns=application,origin,name,installation",
+        "cmd=flatpak args=info org.example.Hello",
+        "cmd=flatpak args=remote-ls --updates --columns=application,version",
+        "cmd=snap args=find bash",
+        "cmd=snap args=list",
+        "cmd=snap args=info hello-world",
+        "cmd=snap args=refresh --list",
+        "cmd=brew args=formulae",
+        "cmd=brew args=search --formula -- bash",
+        "cmd=brew args=info --json=v2 --installed --formula",
+        "cmd=brew args=info --json=v2 --formula hello",
+        "cmd=brew args=outdated --json=v2",
+        "cmd=nix args=--extra-experimental-features nix-command flakes search --json nixpkgs bash",
+        "cmd=nix args=--extra-experimental-features nix-command flakes profile list --json",
+        "cmd=nix args=--extra-experimental-features nix-command flakes eval --json --refresh github:NixOS/nixpkgs/locked#hello.outPath",
+    ]
+}
+
+#[test]
+fn core_read_matrix_propagates_backend_stderr_for_every_backend() {
+    if std::env::var_os("CORE_READ_MATRIX_FAILURE_CHILD").is_some() {
+        for backend in BackendId::ALL {
+            let error = BuiltinBackend::new(backend)
+                .search("failure")
+                .expect_err("failed read must not be masked");
+            assert!(
+                matches!(error, BackendError::CommandFailed { ref message, .. } if message.contains("stderr")),
+                "{backend:?} error did not preserve stderr: {error}"
+            );
+        }
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let script = r##"#!/bin/sh
+if [ "${CORE_READ_MATRIX_FAILURE-}" = 1 ]; then
+  printf '%s stderr\n' "${0##*/}" >&2
+  exit 23
+fi
+exit 0
+"##;
+    for name in [
+        "pacman",
+        "paru",
+        "yay",
+        "apt-cache",
+        "apt-get",
+        "dpkg-query",
+        "dnf5",
+        "dnf",
+        "zypper",
+        "apk",
+        "xbps-query",
+        "xbps-install",
+        "xbps-remove",
+        "flatpak",
+        "snap",
+        "brew",
+        "nix",
+        "checkupdates",
+    ] {
+        fixture.install(name, script);
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("core_read_matrix_propagates_backend_stderr_for_every_backend")
+        .arg("--nocapture")
+        .env("CORE_READ_MATRIX_FAILURE_CHILD", "1")
+        .env("CORE_READ_MATRIX_FAILURE", "1")
+        .env("HOME", &fixture.0)
+        .env("XDG_CACHE_HOME", &fixture.0)
+        .env(
+            "PATH",
+            std::env::join_paths([
+                fixture.0.as_path(),
+                Path::new("/usr/bin"),
+                Path::new("/bin"),
+            ])
+            .unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
