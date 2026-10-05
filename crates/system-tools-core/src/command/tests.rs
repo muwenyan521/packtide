@@ -146,8 +146,12 @@ exit 0
 fn privilege_runner_uses_trusted_sudo_and_fixed_path() {
     // Given trusted and hostile directories containing a sudo executable
     let fixture = std::env::temp_dir().join(format!(
-        "system-tools-core-privilege-{}",
-        std::process::id()
+        "system-tools-core-privilege-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos()
     ));
     let trusted = fixture.join("trusted");
     let hostile = fixture.join("hostile");
