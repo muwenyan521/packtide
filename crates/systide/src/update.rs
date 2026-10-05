@@ -67,7 +67,7 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
                 error
             })
         },
-    )?;
+    );
     for (backend, state) in &outcome.optional {
         if *state == StepResult::Failed {
             log_warn(
@@ -96,8 +96,15 @@ fn execute_plan(
     plan: &UpdatePlan,
     native: impl FnOnce() -> Result<()>,
     mut run_optional: impl FnMut(BackendId) -> Result<()>,
-) -> Result<UpdateOutcome> {
-    native()?;
+) -> UpdateOutcome {
+    let native = if native().is_ok() {
+        StepResult::Success
+    } else {
+        return UpdateOutcome {
+            native: StepResult::Failed,
+            optional: Vec::new(),
+        };
+    };
     let mut optional = Vec::new();
     for &backend in &plan.optional {
         let state = if run_optional(backend).is_ok() {
@@ -107,10 +114,7 @@ fn execute_plan(
         };
         optional.push((backend, state));
     }
-    Ok(UpdateOutcome {
-        native: StepResult::Success,
-        optional,
-    })
+    UpdateOutcome { native, optional }
 }
 
 fn run_native(backend: BackendId, lang: Lang, resolver: &ExecutableResolver) -> Result<()> {
@@ -240,13 +244,13 @@ mod tests {
             native: BackendId::Brew,
             optional: vec![BackendId::Flatpak, BackendId::Snap],
         };
-        let error = execute_plan(
+        let outcome = execute_plan(
             &plan,
             || run_native(plan.native, Lang::En, &resolver),
             |backend| run_optional(backend, &resolver),
-        )
-        .expect_err("native command failed");
-        assert!(error.to_string().contains("9"));
+        );
+        assert_eq!(outcome.native, StepResult::Failed);
+        assert!(outcome.optional.is_empty());
         assert!(path.join("brew.argv").exists());
         assert!(!path.join("flatpak.argv").exists());
         assert!(!path.join("snap.argv").exists());
@@ -265,8 +269,7 @@ mod tests {
             &plan,
             || run_native(plan.native, Lang::En, &resolver),
             |backend| run_optional(backend, &resolver),
-        )
-        .expect("optional failure is nonfatal");
+        );
         assert_eq!(
             outcome.optional,
             vec![
