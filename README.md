@@ -166,7 +166,7 @@ Release 构建固定使用 workspace `profile.release`（thin LTO、8 个 codege
 
 ## 验证状态（2026-10-05）
 
-当前源码 HEAD 为 `bace172aaeaa2abf5676a5716654383489e69ced`。阶段状态只按可重放工件记录，
+当前源码 HEAD 为 `488eceb92e2a369504d5eecfd0fd31441a8153a2`。阶段状态只按可重放工件记录，
 不等同于把规划文件中的复选框改成完成：
 
 | 范围 | 状态 | 可复查工件与边界 |
