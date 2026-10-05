@@ -170,9 +170,63 @@ exit 23
                 } else {
                     let calls = fs::read_to_string(log).unwrap();
                     assert!(calls.contains("status=23"));
+                    if id == BackendId::Dnf4
+                        || (matches!(id, BackendId::Paru | BackendId::Yay) && name == "installed")
+                    {
+                        let expected = expected_failure_argv(id, name);
+                        let mut lines = calls.lines();
+                        let command = lines.next().unwrap();
+                        assert!(
+                            command.starts_with(&format!("cmd={} ", expected.0)),
+                            "unexpected command trace: {command:?}"
+                        );
+                        let actual = lines
+                            .map(|line| line.strip_prefix("arg=").unwrap().to_string())
+                            .collect::<Vec<_>>();
+                        assert_eq!(actual, expected.1, "{}/{} failure argv", id.as_str(), name);
+                    }
                     println!("{calls}");
                 }
             }
         }
+    }
+}
+
+fn expected_failure_argv(backend: BackendId, operation: &str) -> (&'static str, Vec<String>) {
+    match (backend, operation) {
+        (BackendId::Dnf4, "catalog") | (BackendId::Dnf4, "search") => (
+            "dnf",
+            vec![
+                "repoquery".into(),
+                "--qf".into(),
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0".into(),
+            ],
+        ),
+        (BackendId::Dnf4, "installed") => (
+            "dnf",
+            vec![
+                "repoquery".into(),
+                "--installed".into(),
+                "--qf".into(),
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1".into(),
+            ],
+        ),
+        (BackendId::Dnf4, "details") => (
+            "dnf",
+            vec!["repoquery".into(), "--info".into(), "bash".into()],
+        ),
+        (BackendId::Dnf4, "updates") => (
+            "dnf",
+            vec![
+                "repoquery".into(),
+                "--upgrades".into(),
+                "--qf".into(),
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0".into(),
+            ],
+        ),
+        (BackendId::Paru, "installed") | (BackendId::Yay, "installed") => {
+            ("pacman", vec!["--color=never".into(), "-Qm".into()])
+        }
+        _ => panic!("unsupported focused argv assertion: {backend:?}/{operation}"),
     }
 }
