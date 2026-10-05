@@ -63,11 +63,7 @@ pub(crate) fn install_catalog_for_backends(
         (BackendId::Nix, "nix"),
     ] {
         if command_exists(command)
-            && (!query.is_empty()
-                || !matches!(
-                    id,
-                    BackendId::Snap | BackendId::Nix
-                ))
+            && (!query.is_empty() || !matches!(id, BackendId::Snap | BackendId::Nix))
         {
             ids.push(id);
         }
@@ -328,25 +324,44 @@ mod tests {
         for name in ["apt-get", "apt-cache", "dpkg-query", "snap", "nix"] {
             let path = directory.join(name);
             let body = if matches!(name, "snap" | "nix") {
-                format!("#!/bin/sh\nprintf '%s\\n' {name} >> '{}'\nexit 99\n", log.display())
+                format!(
+                    "#!/bin/sh\nprintf '%s\\n' {name} >> '{}'\nexit 99\n",
+                    log.display()
+                )
             } else {
-                "#!/bin/sh\ncase \"$1\" in dumpavail|--version|-Qq) exit 0;; *) exit 0;; esac\n".to_owned()
+                "#!/bin/sh\ncase \"$1\" in dumpavail|--version|-Qq) exit 0;; *) exit 0;; esac\n"
+                    .to_owned()
             };
             fs::write(&path, body).expect("write fake provider");
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))
                 .expect("make fake provider executable");
         }
-        let path = std::env::join_paths([directory.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
-            .expect("build fixture PATH");
+        let path = std::env::join_paths([
+            directory.as_path(),
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ])
+        .expect("build fixture PATH");
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-            .args(["--exact", "sources::tests::blank_query_is_not_sent_to_query_required_optional_providers", "--nocapture"])
+            .args([
+                "--exact",
+                "sources::tests::blank_query_is_not_sent_to_query_required_optional_providers",
+                "--nocapture",
+            ])
             .env("PACKTIDE_SOURCE_QUERY_CHILD", "1")
             .env("PACKTIDE_SOURCE_QUERY_NATIVE", "1")
             .env("PATH", path)
             .output()
             .expect("run source child");
-        assert!(output.status.success(), "child failed: {}", String::from_utf8_lossy(&output.stderr));
-        assert!(!log.exists(), "query-required providers were invoked for blank query");
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !log.exists(),
+            "query-required providers were invoked for blank query"
+        );
         let _ = fs::remove_dir_all(directory);
     }
 }
