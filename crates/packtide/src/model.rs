@@ -95,6 +95,7 @@ fn parse_versions(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PackageRecord {
+    pub(crate) provenance: PackageRecordProvenance,
     pub(crate) backend: BackendId,
     pub(crate) kind: PackageKind,
     pub(crate) scope: PackageScope,
@@ -106,6 +107,12 @@ pub(crate) struct PackageRecord {
     pub(crate) name: String,
     pub(crate) listing: PackageListing,
     pub(crate) installed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PackageRecordProvenance {
+    Legacy,
+    Backend,
 }
 
 impl PackageRecord {
@@ -127,6 +134,7 @@ impl PackageRecord {
             PackageListing::Version(_) => (None, None),
         };
         Self {
+            provenance: PackageRecordProvenance::Legacy,
             backend,
             kind: source.default_kind(),
             scope,
@@ -149,6 +157,7 @@ impl PackageRecord {
         installed: bool,
     ) -> Self {
         Self {
+            provenance: PackageRecordProvenance::Backend,
             backend: identity.backend,
             kind: identity.kind,
             scope: identity.scope,

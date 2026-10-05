@@ -1,6 +1,6 @@
 use system_tools_core::{BackendId, PackageScope, PackageSource};
 
-use crate::model::{PackageListing, PackageRecord};
+use crate::model::{PackageListing, PackageRecord, PackageRecordProvenance};
 
 const FLATPAK_SYSTEM: &str = "flatpak@system";
 
@@ -74,6 +74,9 @@ pub(crate) fn record_label(record: &PackageRecord) -> String {
 }
 
 pub(crate) fn hidden_token(record: &PackageRecord) -> String {
+    if record.provenance == PackageRecordProvenance::Backend {
+        return record.source.hidden_token(record.source.source_key());
+    }
     let detail = match record.source {
         PackageSource::Aur => record.source.source_key(),
         PackageSource::Flatpak if record.repository.as_deref() == Some(FLATPAK_SYSTEM) => {

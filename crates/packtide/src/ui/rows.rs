@@ -1,7 +1,7 @@
 use super::strip_ansi;
-use crate::model::{PackageListing, PackageRecord};
+use crate::model::{PackageListing, PackageRecord, PackageRecordProvenance};
 use crate::source_metadata;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use system_tools_core::{
     BackendId, NativePackageKey, PackageIdentity, PackageKind, PackageScope, PackageSource,
@@ -79,6 +79,12 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
             .collect::<HashSet<_>>()
     };
     let mut seen = HashSet::new();
+    let typed_aur = catalog
+        .records
+        .iter()
+        .filter(|record| record.source == PackageSource::Aur)
+        .map(|record| (record.native_key.as_str(), record))
+        .collect::<HashMap<_, _>>();
     let mut aur_raw = 0usize;
     let mut aur_rendered = 0usize;
     for name in catalog.aur_names.lines() {
@@ -92,15 +98,21 @@ pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
         if rows_started {
             output.write_all(b"\n")?;
         }
-        let record = PackageRecord::legacy(
-            PackageSource::Aur,
-            Some("aur".to_owned()),
-            name.to_owned(),
-            PackageListing::Version("-".to_owned()),
-            catalog.installed.contains(name),
-        );
+        let legacy;
+        let record = if let Some(record) = typed_aur.get(name) {
+            *record
+        } else {
+            legacy = PackageRecord::legacy(
+                PackageSource::Aur,
+                Some("aur".to_owned()),
+                name.to_owned(),
+                PackageListing::Version("-".to_owned()),
+                catalog.installed.contains(name),
+            );
+            &legacy
+        };
         let mut rendered = Vec::new();
-        write_package_row(&mut rendered, &record, PackageListMode::Install)?;
+        write_package_row(&mut rendered, record, PackageListMode::Install)?;
         output.write_all(&rendered)?;
         aur_rendered += rendered.len();
         rows_started = true;
@@ -170,7 +182,8 @@ pub(crate) fn write_package_row<W: Write + ?Sized>(
 fn hidden_source_token(record: &PackageRecord) -> String {
     let base = source_metadata::hidden_token(record);
     let identity = record.identity();
-    let simple_identity = identity.backend == record.source.backend_for_source()
+    let simple_identity = record.provenance == PackageRecordProvenance::Legacy
+        && identity.backend == record.source.backend_for_source()
         && identity.kind == record.source.default_kind()
         && identity.scope
             == source_metadata::legacy_scope(record.source, record.repository.as_deref())
@@ -205,7 +218,7 @@ fn encode_text(value: &str) -> String {
 }
 
 fn decode_text(value: &str) -> Option<String> {
-    if !value.len().is_multiple_of(2) {
+    if !value.len().is_multiple_of(2) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let bytes = (0..value.len())
@@ -246,9 +259,22 @@ pub(crate) fn parse_package_row(row: &str) -> Option<PackageRow> {
         .map_or(source_label, |(head, _)| head);
     if hidden {
         let (source, detail) = PackageSource::parse_hidden_token(token_source_label)?;
+        let mut repository = source_metadata::hidden_repository(source, detail);
+        if let Some((_, attributes)) = source_label.split_once('|') {
+            for attribute in attributes.split('|') {
+                let (key, value) = attribute.split_once('=')?;
+                if key == "r" {
+                    repository = if value.is_empty() {
+                        None
+                    } else {
+                        Some(decode_text(value)?)
+                    };
+                }
+            }
+        }
         return Some(PackageRow {
             source,
-            repository: source_metadata::hidden_repository(source, detail),
+            repository,
             name: name.to_owned(),
         });
     }
@@ -301,21 +327,37 @@ pub(crate) fn parse_package_identity(row: &str) -> Option<PackageIdentity> {
     let attributes = raw_token
         .split_once('|')
         .map_or("", |(_, attributes)| attributes);
-    for attribute in attributes
-        .split('|')
-        .filter(|attribute| !attribute.is_empty())
-    {
+    let mut seen = HashSet::new();
+    for attribute in attributes.split('|').filter(|_| !attributes.is_empty()) {
         let (key, value) = attribute.split_once('=')?;
+        if !seen.insert(key) {
+            return None;
+        }
         match key {
             "b" => backend = BackendId::parse(value)?,
             "s" => scope = PackageScope::parse(value)?,
             "k" => kind = PackageKind::parse(value)?,
             "n" => native_key = NativePackageKey::new(decode_text(value)?).ok()?,
-            "o" => origin = (!value.is_empty()).then(|| decode_text(value)).flatten(),
-            "d" => display_name = (!value.is_empty()).then(|| decode_text(value)).flatten(),
+            "o" => {
+                origin = if value.is_empty() {
+                    None
+                } else {
+                    Some(decode_text(value)?)
+                }
+            }
+            "d" => {
+                display_name = if value.is_empty() {
+                    None
+                } else {
+                    Some(decode_text(value)?)
+                }
+            }
             "r" => {}
             _ => return None,
         }
+    }
+    if !attributes.is_empty() && ["b", "s", "k", "n"].iter().any(|key| !seen.contains(key)) {
+        return None;
     }
     if backend.package_source() != parsed.source || !backend.supports_kind(kind) {
         return None;
@@ -736,5 +778,113 @@ mod tests {
                 "identity lost for {backend:?}"
             );
         }
+    }
+
+    #[test]
+    fn typed_rows_keep_identity_when_visible_columns_change() {
+        let identity = PackageIdentity::new(
+            BackendId::Apt,
+            PackageKind::System,
+            PackageScope::System,
+            NativePackageKey::new("bash").unwrap(),
+        );
+        let record = PackageRecord::from_identity(
+            identity.clone(),
+            None,
+            "bash".to_owned(),
+            PackageListing::Version("5.3".to_owned()),
+            false,
+        );
+
+        let row = super::render_package_rows(&[record], super::PackageListMode::Install);
+        let token = row.split('\t').next().unwrap();
+        let selection = format!("{token}\tFlatpak\tunrelated display name\t5.3\t");
+
+        assert_eq!(parse_package_identity(&selection), Some(identity));
+        assert_eq!(
+            parse_package_row(&selection).unwrap().source,
+            PackageSource::Apt
+        );
+        assert_eq!(parse_package_row(&selection).unwrap().repository, None);
+    }
+
+    #[test]
+    fn typed_rows_keep_repository_without_reclassifying_source() {
+        let identity = PackageIdentity::new(
+            BackendId::Pacman,
+            PackageKind::System,
+            PackageScope::System,
+            NativePackageKey::new("aur/bash").unwrap(),
+        );
+        let record = PackageRecord::from_identity(
+            identity.clone(),
+            Some("aur".to_owned()),
+            "bash".to_owned(),
+            PackageListing::Version("5.3".to_owned()),
+            false,
+        );
+
+        let row = super::render_package_rows(&[record], super::PackageListMode::Install);
+
+        assert_eq!(parse_package_identity(&row), Some(identity));
+        assert_eq!(
+            parse_package_row(&row).unwrap().source,
+            PackageSource::Pacman
+        );
+        assert_eq!(
+            parse_package_row(&row).unwrap().repository.as_deref(),
+            Some("aur")
+        );
+    }
+
+    #[test]
+    fn aur_catalog_rows_keep_typed_helper_identity() {
+        let identity = PackageIdentity::new(
+            BackendId::Yay,
+            PackageKind::Aur,
+            PackageScope::User,
+            NativePackageKey::new("tool").unwrap(),
+        )
+        .with_origin("aur")
+        .with_display_name("Tool display");
+        let catalog = crate::sources::InstallCatalog {
+            official: Vec::new(),
+            official_names: HashSet::new(),
+            aur_names: "tool\n".to_owned(),
+            installed: HashSet::new(),
+            records: vec![PackageRecord::from_identity(
+                identity.clone(),
+                Some("aur".to_owned()),
+                "tool".to_owned(),
+                PackageListing::Version("-".to_owned()),
+                false,
+            )],
+        };
+        let mut bytes = Vec::new();
+
+        super::write_install_catalog(&catalog, &mut bytes).unwrap();
+
+        let row = String::from_utf8(bytes).unwrap();
+        assert_eq!(parse_package_identity(&row), Some(identity));
+    }
+
+    #[test]
+    fn malformed_typed_metadata_is_rejected_without_legacy_fallback() {
+        let token = "APT:apt|b=apt|s=system|k=system|n=62617368|r=|o=|d=";
+        let cases = [
+            token.replace("|o=", "|o=zz"),
+            token.replace("|d=", "|d=zz"),
+            token.replace("|n=62617368", "|n=中中"),
+            token.replace("|n=62617368", ""),
+            format!("{token}|n=62617368"),
+            format!("{token}|"),
+            token.replace("|r=", "|r=zz"),
+            format!("{token}|unknown=value"),
+        ];
+
+        let identities =
+            cases.map(|token| parse_package_identity(&format!("{token}\tAPT\tbash\t5.3\t")));
+
+        assert!(identities.into_iter().all(|identity| identity.is_none()));
     }
 }
