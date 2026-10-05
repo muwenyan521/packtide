@@ -290,7 +290,13 @@ fn select_rows_with_input(
         shell_quote(executable.to_string_lossy().as_ref()),
     );
     args.extend(["--preview", preview.as_str()]);
-    let query_value = query.join(" ");
+    let query_value = query
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if !query_value.is_empty() {
         args.extend(["--query", query_value.as_str()]);
     }

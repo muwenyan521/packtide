@@ -29,6 +29,12 @@ pub(crate) fn install_catalog_for_backends(
     query: &[String],
 ) -> Result<Vec<PackageRecord>> {
     let registry = BackendRegistry::default();
+    let query = query
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
     let operation = if query.is_empty() {
         if refresh {
             ReadOperation::RefreshCatalog
@@ -56,17 +62,42 @@ pub(crate) fn install_catalog_for_backends(
         (BackendId::Brew, "brew"),
         (BackendId::Nix, "nix"),
     ] {
-        if command_exists(command) {
+        if command_exists(command)
+            && (!query.is_empty()
+                || !matches!(
+                    id,
+                    BackendId::Snap | BackendId::Nix
+                ))
+        {
             ids.push(id);
         }
     }
+    let registry = &registry;
+    let results = std::thread::scope(|scope| {
+        ids.into_iter()
+            .enumerate()
+            .map(|(index, backend)| {
+                let operation = operation.clone();
+                scope.spawn(move || {
+                    let result = registry
+                        .backend(backend)
+                        .map(|provider| provider.read(operation));
+                    (index, backend, result)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().expect("provider read thread panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut results = results;
+    results.sort_by_key(|(index, _, _)| *index);
     let mut records = Vec::new();
     let mut diagnostics = Vec::new();
-    for backend in ids {
-        let Some(provider) = registry.backend(backend) else {
+    for (_, backend, result) in results {
+        let Some(result) = result else {
             continue;
         };
-        let result = provider.read(operation.clone());
         let result = match result {
             Ok(value) => value,
             Err(error) if backend != native => {
@@ -261,4 +292,61 @@ pub(crate) fn valid_package_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"@._+-".contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_catalog_for_backends;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use system_tools_core::BackendId;
+
+    #[test]
+    fn blank_query_is_not_sent_to_query_required_optional_providers() {
+        if std::env::var_os("PACKTIDE_SOURCE_QUERY_CHILD").is_some() {
+            let native = std::env::var("PACKTIDE_SOURCE_QUERY_NATIVE").expect("native backend");
+            let native = native.parse::<u8>().expect("backend marker");
+            let backend = match native {
+                1 => BackendId::Apt,
+                _ => panic!("unsupported child backend"),
+            };
+            install_catalog_for_backends(backend, false, &["   ".to_owned()])
+                .expect("blank query source lookup");
+            return;
+        }
+        let directory = std::env::temp_dir().join(format!(
+            "packtide-source-query-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("create fixture directory");
+        let log = directory.join("provider.log");
+        for name in ["apt-get", "apt-cache", "dpkg-query", "snap", "nix"] {
+            let path = directory.join(name);
+            let body = if matches!(name, "snap" | "nix") {
+                format!("#!/bin/sh\nprintf '%s\\n' {name} >> '{}'\nexit 99\n", log.display())
+            } else {
+                "#!/bin/sh\ncase \"$1\" in dumpavail|--version|-Qq) exit 0;; *) exit 0;; esac\n".to_owned()
+            };
+            fs::write(&path, body).expect("write fake provider");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                .expect("make fake provider executable");
+        }
+        let path = std::env::join_paths([directory.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("build fixture PATH");
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", "sources::tests::blank_query_is_not_sent_to_query_required_optional_providers", "--nocapture"])
+            .env("PACKTIDE_SOURCE_QUERY_CHILD", "1")
+            .env("PACKTIDE_SOURCE_QUERY_NATIVE", "1")
+            .env("PATH", path)
+            .output()
+            .expect("run source child");
+        assert!(output.status.success(), "child failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(!log.exists(), "query-required providers were invoked for blank query");
+        let _ = fs::remove_dir_all(directory);
+    }
 }
