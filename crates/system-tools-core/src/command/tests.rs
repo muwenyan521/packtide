@@ -12,12 +12,14 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn write_executable(path: &std::path::Path, contents: &str) {
-    fs::write(path, contents).expect("write command fixture");
-    let mut permissions = fs::metadata(path)
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, contents).expect("write command fixture");
+    let mut permissions = fs::metadata(&temporary)
         .expect("stat command fixture")
         .permissions();
     permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).expect("make command fixture executable");
+    fs::set_permissions(&temporary, permissions).expect("make command fixture executable");
+    fs::rename(temporary, path).expect("publish command fixture");
 }
 
 #[test]
