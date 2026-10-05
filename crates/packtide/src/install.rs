@@ -1,16 +1,19 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::env;
-use std::time::{Instant, SystemTime};
-use system_tools_core::{BackendId, TransactionAction};
+use std::time::SystemTime;
+use system_tools_core::{
+    BackendId, CommandPrivilege, ExecutableResolver, PackageBackend, PackageIdentity, PackageScope,
+    TransactionAction,
+};
 
 use crate::source_metadata::{PackageRoute, package_route};
-use crate::sources::{install_catalog_for_backends, install_rows};
-use crate::transaction::{execute_native, execute_package};
+use crate::sources::install_catalog_for_backends;
+use crate::sources::install_rows;
+use crate::transaction::{execute_native, execute_package, execute_package_typed};
 use crate::ui::{parse_package_identity, parse_package_row, write_install_catalog};
 
 pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
-    let started = Instant::now();
     let started_at = SystemTime::now();
     crate::app::require_command_for(
         "fzf",
@@ -19,7 +22,13 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         false,
     )?;
     let native = crate::app::native_backend("capability.install")?;
-    if native != system_tools_core::BackendId::Pacman {
+    if native == BackendId::Pacman {
+        return run_pacman(query, refresh, started_at);
+    }
+    {
+        // All detected backends use the same typed catalog/query path. This keeps
+        // Arch list-only and interactive pickers in lockstep, including optional
+        // providers (AUR/Flatpak) and query filtering.
         let records = install_catalog_for_backends(native, refresh, query)?;
         let rows = crate::ui::render_package_rows(&records, crate::ui::PackageListMode::Install);
         if env::var_os("PACKTIDE_INSTALL_LIST_ONLY").is_some() {
@@ -30,18 +39,46 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         let Some(selected) = selected else {
             return Ok(());
         };
-        let mut grouped: HashMap<BackendId, Vec<system_tools_core::PackageIdentity>> =
-            HashMap::new();
+        let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+        let registry = system_tools_core::BackendRegistry::default();
+        let mut grouped: HashMap<
+            (BackendId, PackageScope, CommandPrivilege),
+            Vec<PackageIdentity>,
+        > = HashMap::new();
         for row in selected.lines() {
             if let Some(identity) = parse_package_identity(row) {
-                grouped.entry(identity.backend).or_default().push(identity);
+                let privilege = registry
+                    .backend(identity.backend)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("backend {} is not registered", identity.backend.as_str())
+                    })?
+                    .write_with_resolver(
+                        system_tools_core::WriteOperation::transaction(
+                            TransactionAction::Install,
+                            vec![identity.clone()],
+                        ),
+                        &resolver,
+                    )?
+                    .command
+                    .privilege;
+                grouped
+                    .entry((identity.backend, identity.scope, privilege))
+                    .or_default()
+                    .push(identity);
             }
         }
-        for packages in grouped.values() {
-            execute_native(TransactionAction::Install, packages)?;
+        for ((backend, _, _), packages) in grouped {
+            if backend == BackendId::Pacman {
+                execute_package_typed("pacman", TransactionAction::Install, &packages)?;
+            } else {
+                execute_native(TransactionAction::Install, &packages)?;
+            }
         }
-        return Ok(());
+        Ok(())
     }
+}
+
+fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result<()> {
     let pacman = crate::app::require_command_for(
         "pacman",
         "capability.catalog",
@@ -49,12 +86,6 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
         false,
     )?;
     let helper = crate::app::package_helper_for("package installation")?;
-    if env::var_os("SYSTEM_TOOLS_DEBUG_TIMINGS").is_some() {
-        eprintln!(
-            "picker_timing picker=install phase=prepared elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-    }
     if env::var_os("PACKTIDE_INSTALL_LIST_ONLY").is_some() {
         let catalog = install_rows(&pacman, refresh)?;
         write_install_catalog(&catalog, std::io::stdout().lock())?;
@@ -150,6 +181,7 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn picker_failure_key(error: &anyhow::Error) -> &'static str {
     if error
         .chain()

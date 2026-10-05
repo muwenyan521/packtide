@@ -34,6 +34,7 @@ pub(crate) fn render_package_rows(records: &[PackageRecord], mode: PackageListMo
     String::from_utf8(rows).expect("rendered package rows are valid UTF-8")
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_install_catalog<W: Write>(
     catalog: &crate::sources::InstallCatalog,
     mut output: W,
@@ -42,6 +43,7 @@ pub(crate) fn write_install_catalog<W: Write>(
     write_aur_install_rows(catalog, &mut output, rows_started)
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_official_install_rows<W: Write>(
     catalog: &crate::sources::InstallCatalog,
     output: &mut W,
@@ -57,6 +59,7 @@ pub(crate) fn write_official_install_rows<W: Write>(
     Ok(rows_started)
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_aur_install_rows<W: Write + ?Sized>(
     catalog: &crate::sources::InstallCatalog,
     output: &mut W,

@@ -46,6 +46,7 @@ pub(crate) fn select_rows(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn select_install_catalog_streaming(
     helper: &str,
     pacman: &std::path::Path,
@@ -54,20 +55,26 @@ pub(crate) fn select_install_catalog_streaming(
     started: Option<SystemTime>,
 ) -> Result<Option<String>> {
     let pacman = pacman.to_path_buf();
+    let query = query.to_vec();
+    let picker_query = query.clone();
     let has_rows = Arc::new(AtomicBool::new(false));
     let writer_has_rows = Arc::clone(&has_rows);
     select_rows_with_input(
         helper,
         false,
-        query,
+        &picker_query,
         started,
         Some(has_rows),
         move |stdin| {
             let source_started = Instant::now();
             let mut official_first = false;
             let mut rows_started = false;
-            let catalog =
-                crate::sources::install_rows_streaming(&pacman, refresh, false, |record| {
+            let catalog = crate::sources::install_rows_streaming(
+                &pacman,
+                refresh,
+                &query,
+                false,
+                |record| {
                     if !official_first {
                         timing_event("official_first", source_started);
                         official_first = true;
@@ -84,7 +91,8 @@ pub(crate) fn select_install_catalog_streaming(
                     .context("failed writing package row to fzf")?;
                     rows_started = true;
                     Ok(())
-                })?;
+                },
+            )?;
             timing_event("official_done", source_started);
             timing_event("aur_start", source_started);
             super::rows::write_aur_install_rows(&catalog, stdin, rows_started)
@@ -109,6 +117,15 @@ fn timing_event(phase: &str, started: Instant) {
             started.elapsed().as_millis()
         );
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn query_reload_bind(executable: &std::path::Path, refresh: bool) -> String {
+    let executable = shell_quote(executable.to_string_lossy().as_ref());
+    let refresh = if refresh { " --refresh" } else { "" };
+    format!(
+        "change:reload(sh -c 'set -eu; state=${{PACKTIDE_QUERY_STATE:?}}; lock=\"$state.lock\"; while ! mkdir \"$lock\" 2>/dev/null; do sleep 0.01; done; generation=$(cat \"$state\" 2>/dev/null || printf 0); generation=$((generation + 1)); printf \"%s\\n\" \"$generation\" >\"$state\"; rmdir \"$lock\"; sleep 0.3; current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" != \"$generation\" ]; then exit 0; fi; q=$(printf \"%s\" \"$1\" | sed -e \"s/^[[:space:]]*//\" -e \"s/[[:space:]]*$//\"); output=$(mktemp \"${{TMPDIR:-/tmp}}/packtide-query.XXXXXX\"); child=; cleanup() {{ status=$?; trap - TERM INT HUP EXIT; if [ -n \"$child\" ]; then kill -- -\"$child\" 2>/dev/null || kill \"$child\" 2>/dev/null || true; wait \"$child\" 2>/dev/null || true; fi; rm -f \"$output\"; exit $status; }}; trap cleanup TERM INT HUP EXIT; if [ ${{#q}} -lt 2 ]; then setsid env PACKTIDE_INSTALL_LIST_ONLY=1 \"$0\" install{refresh} >\"$output\" & else setsid env PACKTIDE_INSTALL_LIST_ONLY=1 \"$0\" install{refresh} \"$q\" >\"$output\" & fi; child=$!; while kill -0 \"$child\" 2>/dev/null; do current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" != \"$generation\" ]; then kill -- -\"$child\" 2>/dev/null || kill \"$child\" 2>/dev/null || true; break; fi; sleep 0.05; done; wait \"$child\" 2>/dev/null || true; current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" = \"$generation\" ]; then cat \"$output\"; fi; rm -f \"$output\"; trap - TERM INT HUP EXIT' {executable} {{q}})"
+    )
 }
 
 fn push_wrapped_item(output: &mut String, line_width: &mut usize, item: &str, columns: usize) {
@@ -251,6 +268,20 @@ fn select_rows_with_input(
         }
         None => format!("load:change-prompt({prompt})"),
     };
+    let query_state = (!removing).then(|| {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "packtide-query-state-{}-{nonce}",
+            std::process::id()
+        ))
+    });
+    if let Some(state) = &query_state {
+        fs::write(state, "0").context("cannot initialize query generation state")?;
+    }
+    let query_reload = (!removing).then(|| query_reload_bind(&executable, false));
     let mut args = vec!["--multi"];
     args.extend_from_slice(COMMON_FZF_LAYOUT_ARGS);
     args.extend([
@@ -282,6 +313,9 @@ fn select_rows_with_input(
         "--bind",
         load_bind.as_str(),
     ]);
+    if let Some(query_reload) = query_reload.as_deref() {
+        args.extend(["--bind", query_reload]);
+    }
     if removing {
         args.extend(["--bind", "alt-c:accept"]);
     }
@@ -300,9 +334,12 @@ fn select_rows_with_input(
     if !query_value.is_empty() {
         args.extend(["--query", query_value.as_str()]);
     }
-    let mut child = Command::new("fzf")
-        .args(args)
-        .env("FZF_DEFAULT_OPTS", "")
+    let mut fzf_command = Command::new("fzf");
+    fzf_command.args(args).env("FZF_DEFAULT_OPTS", "");
+    if let Some(state) = &query_state {
+        fzf_command.env("PACKTIDE_QUERY_STATE", state);
+    }
+    let mut child = fzf_command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -317,6 +354,11 @@ fn select_rows_with_input(
         let _ = writer_tx.send(result);
     });
     let output = child.wait_with_output()?;
+    if let Some(state) = query_state {
+        let lock = state.with_extension("lock");
+        let _ = fs::remove_file(&state);
+        let _ = fs::remove_dir_all(lock);
+    }
     match writer_rx.recv_timeout(std::time::Duration::from_millis(50)) {
         Ok(Err(error))
             if error
@@ -355,7 +397,7 @@ fn select_rows_with_input(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_fzf_status, picker_header, wrap_shortcut_line};
+    use super::{classify_fzf_status, picker_header, query_reload_bind, wrap_shortcut_line};
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
     use unicode_width::UnicodeWidthStr;
@@ -404,5 +446,25 @@ mod tests {
         assert!(header.contains("Enter:install"));
         assert!(header.contains("Ctrl+R:refresh"));
         assert!(header.contains("Esc:exit"));
+    }
+
+    #[test]
+    fn query_reload_binding_trims_debounces_and_restores_initial_rows() {
+        let bind = query_reload_bind(std::path::Path::new("/tmp/packtide"), true);
+        assert!(bind.starts_with("change:reload(sh -c 'set -eu;"));
+        assert!(bind.contains("sleep 0.3"));
+        assert!(bind.contains("sed -e \"s/^[[:space:]]*//\""));
+        assert!(bind.contains("-e \"s/[[:space:]]*$//\""));
+        assert!(bind.contains("${#q} -lt 2"));
+        assert!(bind.contains("PACKTIDE_INSTALL_LIST_ONLY=1"));
+        assert!(bind.contains("PACKTIDE_QUERY_STATE"));
+        assert!(bind.contains("setsid"));
+        assert!(bind.contains("kill -- -\"$child\""));
+        assert!(bind.contains("while kill -0 \"$child\""));
+        assert!(bind.contains("[ \"$current\" != \"$generation\" ]"));
+        assert!(bind.contains("current=$(cat \"$state\""));
+        assert!(bind.contains("mktemp"));
+        assert!(bind.contains("--refresh"));
+        assert!(bind.contains("{q}"));
     }
 }

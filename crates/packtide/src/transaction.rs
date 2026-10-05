@@ -6,6 +6,7 @@ use system_tools_core::{
     PackageScope, TransactionAction, command_exists, run_command_plan,
 };
 
+#[allow(dead_code)]
 pub(crate) fn execute_package(
     helper: &str,
     action: TransactionAction,

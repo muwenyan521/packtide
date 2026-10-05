@@ -4,10 +4,11 @@ mod pacman;
 
 use crate::model::PackageRecord;
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use system_tools_core::{
     BackendId, BackendRegistry, PackageBackend, ReadOperation, command_exists,
 };
@@ -15,12 +16,26 @@ use system_tools_core::{
 #[cfg(test)]
 pub(crate) use pacman::parse_install_rows;
 
+#[allow(dead_code)]
 pub(crate) struct InstallCatalog {
     pub(crate) official: Vec<PackageRecord>,
     pub(crate) official_names: HashSet<String>,
     pub(crate) aur_names: String,
     pub(crate) installed: HashSet<String>,
     pub(crate) records: Vec<PackageRecord>,
+}
+
+const QUERY_MIN_CHARS: usize = 2;
+const QUERY_CACHE_TTL: Duration = Duration::from_secs(30);
+type QueryCache = HashMap<(BackendId, String), (Instant, Vec<PackageRecord>)>;
+
+fn query_cache() -> &'static Mutex<QueryCache> {
+    static CACHE: OnceLock<Mutex<QueryCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn query_is_eligible(query: &str) -> bool {
+    query.chars().count() >= QUERY_MIN_CHARS
 }
 
 pub(crate) fn install_catalog_for_backends(
@@ -35,6 +50,15 @@ pub(crate) fn install_catalog_for_backends(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
+    let normalized_query = query.join(" ");
+    if !refresh
+        && query_is_eligible(&normalized_query)
+        && let Ok(cache) = query_cache().lock()
+        && let Some((at, records)) = cache.get(&(native, normalized_query.clone()))
+        && at.elapsed() <= QUERY_CACHE_TTL
+    {
+        return Ok(records.clone());
+    }
     let operation = if query.is_empty() {
         if refresh {
             ReadOperation::RefreshCatalog
@@ -63,7 +87,8 @@ pub(crate) fn install_catalog_for_backends(
         (BackendId::Nix, "nix"),
     ] {
         if command_exists(command)
-            && (!query.is_empty() || !matches!(id, BackendId::Snap | BackendId::Nix))
+            && ((!query.is_empty() && query_is_eligible(&normalized_query))
+                || !matches!(id, BackendId::Snap | BackendId::Nix))
         {
             ids.push(id);
         }
@@ -145,29 +170,54 @@ pub(crate) fn install_catalog_for_backends(
             diagnostics.join("; ")
         );
     }
+    if !refresh
+        && query_is_eligible(&normalized_query)
+        && let Ok(mut cache) = query_cache().lock()
+    {
+        cache.insert(
+            (native, normalized_query),
+            (Instant::now(), records.clone()),
+        );
+        cache.retain(|_, (at, _)| at.elapsed() <= QUERY_CACHE_TTL);
+    }
     Ok(records)
 }
 
+#[allow(dead_code)]
 pub(crate) fn install_rows(pacman: &Path, refresh: bool) -> Result<InstallCatalog> {
-    install_rows_streaming(pacman, refresh, true, |_| Ok(()))
+    install_rows_streaming(pacman, refresh, &[], true, |_| Ok(()))
 }
 
+#[allow(dead_code)]
 pub(crate) fn install_rows_streaming(
     _pacman: &Path,
     refresh: bool,
+    query: &[String],
     retain_official: bool,
     mut write_official: impl FnMut(&PackageRecord) -> Result<()>,
 ) -> Result<InstallCatalog> {
     let started = Instant::now();
     let registry = BackendRegistry::default();
+    let normalized_query = query
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let operation = if query_is_eligible(&normalized_query) {
+        ReadOperation::Search {
+            query: normalized_query,
+        }
+    } else if refresh {
+        ReadOperation::RefreshCatalog
+    } else {
+        ReadOperation::Catalog
+    };
     let typed_catalog = registry
         .backend(BackendId::Pacman)
         .ok_or_else(|| anyhow::anyhow!("backend pacman is not registered"))?
-        .read(if refresh {
-            ReadOperation::RefreshCatalog
-        } else {
-            ReadOperation::Catalog
-        })
+        .read(operation)
         .map_err(|error| anyhow::anyhow!("pacman catalog exited: typed read failed: {error}"))?;
     let installed = Command::new(_pacman)
         .args(["-Qq"])
@@ -292,11 +342,20 @@ pub(crate) fn valid_package_name(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::install_catalog_for_backends;
+    use super::{install_catalog_for_backends, install_rows_streaming, query_is_eligible};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use system_tools_core::BackendId;
+
+    #[test]
+    fn query_policy_requires_two_unicode_characters() {
+        assert!(!query_is_eligible(""));
+        assert!(!query_is_eligible("h"));
+        assert!(query_is_eligible("he"));
+        assert!(!query_is_eligible("好"));
+        assert!(query_is_eligible("中文"));
+    }
 
     #[test]
     fn blank_query_is_not_sent_to_query_required_optional_providers() {
@@ -361,6 +420,72 @@ mod tests {
         assert!(
             !log.exists(),
             "query-required providers were invoked for blank query"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn streaming_query_uses_typed_pacman_search() {
+        if std::env::var_os("PACKTIDE_STREAMING_QUERY_CHILD").is_some() {
+            let pacman =
+                std::env::var_os("PACKTIDE_STREAMING_QUERY_PACMAN").expect("pacman fixture path");
+            let catalog = install_rows_streaming(
+                Path::new(&pacman),
+                false,
+                &["  bash  ".to_owned()],
+                false,
+                |_| Ok(()),
+            )
+            .expect("streaming query catalog");
+            assert_eq!(
+                catalog
+                    .records
+                    .iter()
+                    .map(|record| record.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["bash"]
+            );
+            return;
+        }
+
+        let directory = std::env::temp_dir().join(format!(
+            "packtide-streaming-query-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("create fixture directory");
+        let pacman = directory.join("pacman");
+        fs::write(
+            &pacman,
+            "#!/bin/sh\ncase \"$1 $2\" in\n  *-Sl) printf '%s\\n' 'core bash 5.2' 'extra vim 9.1' ;;\n  -Qq*) printf '%s\\n' bash ;;\nesac\n",
+        )
+        .expect("write fake pacman");
+        fs::set_permissions(&pacman, fs::Permissions::from_mode(0o755))
+            .expect("make fake pacman executable");
+        let path = std::env::join_paths([
+            directory.as_path(),
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ])
+        .expect("build fixture PATH");
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "sources::tests::streaming_query_uses_typed_pacman_search",
+                "--nocapture",
+            ])
+            .env("PACKTIDE_STREAMING_QUERY_CHILD", "1")
+            .env("PACKTIDE_STREAMING_QUERY_PACMAN", &pacman)
+            .env("PATH", path)
+            .output()
+            .expect("run source child");
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
         let _ = fs::remove_dir_all(directory);
     }
