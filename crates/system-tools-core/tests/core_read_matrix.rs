@@ -486,7 +486,7 @@ fn assert_exact_write_plan(
     } else if backend == BackendId::Snap && matches!(operation, WriteOperation::Remove { .. }) {
         vec!["remove".into(), key.split('@').next().unwrap().into()]
     } else {
-        expected_write_args(backend, operation)
+        let mut args = expected_write_args(backend, operation)
             .into_iter()
             .map(|arg| {
                 if arg == "PKG" {
@@ -495,7 +495,13 @@ fn assert_exact_write_plan(
                     arg.to_string()
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if matches!(operation, WriteOperation::Upgrade { .. })
+            && matches!(backend, BackendId::Flatpak | BackendId::Brew)
+        {
+            args.push(key.to_string());
+        }
+        args
     };
     let actual: Vec<_> = plan
         .command
@@ -544,6 +550,11 @@ fn run_child() {
         let mut write_operations = vec![WriteOperation::Remove {
             packages: vec![identity.clone()],
         }];
+        if matches!(backend, BackendId::Flatpak | BackendId::Brew) {
+            write_operations.push(WriteOperation::Upgrade {
+                packages: vec![identity.clone()],
+            });
+        }
         if !matches!(
             backend,
             BackendId::Flatpak | BackendId::Brew | BackendId::Nix
