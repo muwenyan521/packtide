@@ -21,15 +21,14 @@ pub(crate) fn run(query: &[String]) -> Result<()> {
         "the package removal picker",
         false,
     )?;
-    let pacman = crate::app::require_command_for(
-        "pacman",
-        "capability.catalog",
-        "the installed package lookup",
-        false,
-    )?;
     let native = crate::app::native_backend("capability.remove")?;
     let pacman = if native == BackendId::Pacman {
-        Some(pacman)
+        Some(crate::app::require_command_for(
+            "pacman",
+            "capability.catalog",
+            "the installed package lookup",
+            false,
+        )?)
     } else {
         None
     };

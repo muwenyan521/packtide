@@ -47,19 +47,29 @@ pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
     })?;
     let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
     let backend = native.backend_id(|command| resolver.resolve(command).is_some());
-    let command = match backend {
-        BackendId::Dnf4 => "dnf",
-        other => other.as_str(),
-    };
+    let command = native_entry_command(backend);
     if ExecutableResolver::from_path(env::var_os("PATH").as_deref())
         .resolve(OsStr::new(command))
         .is_none()
     {
+        let description = match capability {
+            "capability.remove" => "the installed package lookup",
+            _ => capability,
+        };
         anyhow::bail!(
-            "required command '{command}' is unavailable for {capability}; install it and retry"
+            "required command '{command}' is unavailable for {description}; install it and retry"
         );
     }
     Ok(backend)
+}
+
+fn native_entry_command(backend: BackendId) -> &'static str {
+    match backend {
+        BackendId::Apt => "apt-get",
+        BackendId::Dnf4 => "dnf",
+        BackendId::Xbps => "xbps-query",
+        _ => backend.as_str(),
+    }
 }
 
 pub(crate) fn require_command_for(
@@ -116,5 +126,18 @@ pub(crate) fn run() -> Result<()> {
             count,
         }) => sysup(list, &ui_lang, &news_source, count),
         None => Cli::command().print_help().map_err(Into::into),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_entry_command;
+    use system_tools_core::BackendId;
+
+    #[test]
+    fn native_entry_uses_provider_executable_names() {
+        assert_eq!(native_entry_command(BackendId::Xbps), "xbps-query");
+        assert_eq!(native_entry_command(BackendId::Dnf4), "dnf");
+        assert_eq!(native_entry_command(BackendId::Apt), "apt-get");
     }
 }
