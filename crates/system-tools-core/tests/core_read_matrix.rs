@@ -75,11 +75,12 @@ fn core_read_matrix_fake_path_dispatches_every_backend_operation() {
     let fixture = Fixture::new();
     let script = r##"#!/bin/sh
 printf 'uid=%s lc_all=%s\n' "$(id -u)" "${LC_ALL-}" >> "$CORE_READ_MATRIX_LOG"
+printf 'cmd=%s\n' "${0##*/}" >> "$CORE_READ_MATRIX_LOG"
 for arg in "$@"; do printf 'arg=%s\n' "$arg" >> "$CORE_READ_MATRIX_LOG"; done
+printf 'end\n' >> "$CORE_READ_MATRIX_LOG"
 case "${0##*/}" in
   *) if [ "${CORE_READ_MATRIX_FAILURE-}" = 1 ]; then printf '%s stderr\n' "${0##*/}" >&2; exit 23; fi ;;
 esac
-printf 'cmd=%s args=%s\n' "${0##*/}" "$*" >> "$CORE_READ_MATRIX_LOG"
 case "${0##*/}" in
   pacman|paru|yay) case "$*" in *-Qm*) printf 'hello-aur 1.0\n' ;; *-Q*) printf 'bash 5.2\n' ;; *-Qua*) printf 'bash 5.3\n' ;; *) printf 'core/bash 5.2\n' ;; esac ;;
   checkupdates) printf 'bash 5.3\n' ;;
@@ -153,66 +154,179 @@ esac
         calls.lines().any(|line| line.contains("lc_all=C")),
         "fake commands did not receive LC_ALL=C: {calls}"
     );
-    for expected in expected_read_argv() {
-        assert!(
-            calls.lines().any(|line| line == expected),
-            "missing exact read argv {expected:?}; calls:\n{calls}"
+    for (program, args, count) in expected_read_argv() {
+        let mut record = format!("cmd={program}\n");
+        for arg in args {
+            record.push_str(&format!("arg={arg}\n"));
+        }
+        record.push_str("end\n");
+        assert_eq!(
+            calls.matches(&record).count(),
+            count,
+            "exact argv boundaries: {record:?}"
         );
+        println!("exact argv count={count}: {record:?}");
     }
 }
 
-fn expected_read_argv() -> Vec<&'static str> {
+fn expected_read_argv() -> Vec<(&'static str, Vec<&'static str>, usize)> {
     vec![
-        "cmd=pacman args=--color=never -Sl",
-        "cmd=pacman args=--color=never -Q",
-        "cmd=pacman args=--color=always -Si bash",
-        "cmd=checkupdates args=",
-        "cmd=paru args=-Sl",
-        "cmd=paru args=--color=always -Si hello-aur",
-        "cmd=paru args=-Qua",
-        "cmd=yay args=-Sl",
-        "cmd=yay args=--color=always -Si hello-aur",
-        "cmd=yay args=-Qua",
-        "cmd=apt-cache args=dumpavail",
-        "cmd=apt-cache args=show --no-all-versions bash",
-        "cmd=dpkg-query args=-W --showformat=${Package}\\t${Version}\\t${Architecture}\\t${Status}\\n",
-        "cmd=apt-get args=--just-print --simulate upgrade",
-        "cmd=dnf5 args=list --json",
-        "cmd=dnf5 args=list --installed --json",
-        "cmd=dnf5 args=info bash",
-        "cmd=dnf5 args=list --upgrades --json",
-        "cmd=dnf args=repoquery --info bash",
-        "cmd=zypper args=--xmlout search -s -t package",
-        "cmd=zypper args=--xmlout search -s -t package bash",
-        "cmd=zypper args=--xmlout search -s -i -t package",
-        "cmd=zypper args=--xmlout info bash",
-        "cmd=zypper args=--xmlout list-updates",
-        "cmd=apk args=search --no-cache *",
-        "cmd=apk args=search --no-cache bash",
-        "cmd=apk args=info --installed",
-        "cmd=apk args=info bash",
-        "cmd=apk args=version --available",
-        "cmd=xbps-query args=-Rs .",
-        "cmd=xbps-query args=-Rs bash",
-        "cmd=xbps-query args=-l",
-        "cmd=xbps-query args=-S bash",
-        "cmd=xbps-query args=-u",
-        "cmd=flatpak args=remote-ls --app --cached --columns=application,origin,name,installation",
-        "cmd=flatpak args=list --app --columns=application,origin,name,installation",
-        "cmd=flatpak args=info org.example.Hello",
-        "cmd=flatpak args=remote-ls --updates --columns=application,version",
-        "cmd=snap args=find bash",
-        "cmd=snap args=list",
-        "cmd=snap args=info hello-world",
-        "cmd=snap args=refresh --list",
-        "cmd=brew args=formulae",
-        "cmd=brew args=search --formula -- bash",
-        "cmd=brew args=info --json=v2 --installed --formula",
-        "cmd=brew args=info --json=v2 --formula hello",
-        "cmd=brew args=outdated --json=v2",
-        "cmd=nix args=--extra-experimental-features nix-command flakes search --json nixpkgs bash",
-        "cmd=nix args=--extra-experimental-features nix-command flakes profile list --json",
-        "cmd=nix args=--extra-experimental-features nix-command flakes eval --json --refresh github:NixOS/nixpkgs/locked#hello.outPath",
+        ("pacman", vec!["--color=never", "-Sl"], 2),
+        ("pacman", vec!["--color=never", "-Q"], 1),
+        ("pacman", vec!["--color=never", "-Qm"], 2),
+        ("pacman", vec!["--color=always", "-Si", "bash"], 1),
+        ("checkupdates", vec![], 1),
+        ("paru", vec!["-Sl"], 2),
+        ("paru", vec!["--color=always", "-Si", "hello-aur"], 1),
+        ("paru", vec!["-Qua"], 1),
+        ("yay", vec!["-Sl"], 2),
+        ("yay", vec!["--color=always", "-Si", "hello-aur"], 1),
+        ("yay", vec!["-Qua"], 1),
+        ("apt-cache", vec!["dumpavail"], 2),
+        ("apt-cache", vec!["show", "--no-all-versions", "bash"], 1),
+        (
+            "dpkg-query",
+            vec![
+                "-W",
+                "--showformat=${Package}\\t${Version}\\t${Architecture}\\t${Status}\\n",
+            ],
+            1,
+        ),
+        ("apt-get", vec!["--just-print", "--simulate", "upgrade"], 1),
+        ("dnf5", vec!["list", "--json"], 2),
+        ("dnf5", vec!["list", "--installed", "--json"], 1),
+        ("dnf5", vec!["info", "bash"], 1),
+        ("dnf5", vec!["list", "--upgrades", "--json"], 1),
+        (
+            "dnf",
+            vec![
+                "repoquery",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+            ],
+            2,
+        ),
+        (
+            "dnf",
+            vec![
+                "repoquery",
+                "--installed",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1",
+            ],
+            1,
+        ),
+        (
+            "dnf",
+            vec![
+                "repoquery",
+                "--upgrades",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+            ],
+            1,
+        ),
+        ("dnf", vec!["repoquery", "--info", "bash"], 1),
+        (
+            "zypper",
+            vec!["--xmlout", "search", "-s", "-t", "package"],
+            1,
+        ),
+        (
+            "zypper",
+            vec!["--xmlout", "search", "-s", "-t", "package", "bash"],
+            1,
+        ),
+        (
+            "zypper",
+            vec!["--xmlout", "search", "-s", "-i", "-t", "package"],
+            1,
+        ),
+        ("zypper", vec!["--xmlout", "info", "bash"], 1),
+        ("zypper", vec!["--xmlout", "list-updates"], 1),
+        ("apk", vec!["search", "--no-cache", "*"], 1),
+        ("apk", vec!["search", "--no-cache", "bash"], 1),
+        ("apk", vec!["info", "--installed"], 1),
+        ("apk", vec!["info", "bash"], 1),
+        ("apk", vec!["version", "--available"], 1),
+        ("xbps-query", vec!["-Rs", "."], 1),
+        ("xbps-query", vec!["-Rs", "bash"], 1),
+        ("xbps-query", vec!["-l"], 1),
+        ("xbps-query", vec!["-S", "bash"], 1),
+        ("xbps-query", vec!["-u"], 1),
+        (
+            "flatpak",
+            vec![
+                "remote-ls",
+                "--app",
+                "--cached",
+                "--columns=application,origin,name,installation",
+            ],
+            1,
+        ),
+        (
+            "flatpak",
+            vec![
+                "list",
+                "--app",
+                "--columns=application,origin,name,installation",
+            ],
+            2,
+        ),
+        ("flatpak", vec!["info", "org.example.Hello"], 1),
+        (
+            "flatpak",
+            vec!["remote-ls", "--updates", "--columns=application,version"],
+            1,
+        ),
+        ("snap", vec!["find", "bash"], 1),
+        ("snap", vec!["list"], 1),
+        ("snap", vec!["info", "hello-world"], 1),
+        ("snap", vec!["refresh", "--list"], 1),
+        ("brew", vec!["formulae"], 1),
+        ("brew", vec!["search", "--formula", "--", "bash"], 1),
+        (
+            "brew",
+            vec!["info", "--json=v2", "--installed", "--formula"],
+            1,
+        ),
+        ("brew", vec!["info", "--json=v2", "--formula", "hello"], 1),
+        ("brew", vec!["outdated", "--json=v2"], 1),
+        (
+            "nix",
+            vec![
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "search",
+                "--json",
+                "nixpkgs",
+                "bash",
+            ],
+            1,
+        ),
+        (
+            "nix",
+            vec![
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "profile",
+                "list",
+                "--json",
+            ],
+            3,
+        ),
+        (
+            "nix",
+            vec![
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "eval",
+                "--json",
+                "--refresh",
+                "github:NixOS/nixpkgs/locked#hello.outPath",
+            ],
+            1,
+        ),
     ]
 }
 
