@@ -166,13 +166,13 @@ Release 构建固定使用 workspace `profile.release`（thin LTO、8 个 codege
 
 ## 验证状态（2026-10-05）
 
-当前源码 HEAD 为 `c6dd61a3c205432c8dd24e660b6c4160766978a3`。阶段状态只按可重放工件记录，
+当前源码 HEAD 为 `b8d966e1b0731620559d1ee6ba077f811f1ff8be`。阶段状态只按可重放工件记录，
 不等同于把规划文件中的复选框改成完成：
 
 | 范围 | 状态 | 可复查工件与边界 |
 | --- | --- | --- |
 | 阶段 5.1-5.3 | PASS | `.omo/evidence/stage5-gate-review-current.md`、`.omo/evidence/stage5-contract-final.md`：typed update identity/current/candidate、native-first/optional-after-native、optional diagnostics/non-zero、DNF4/DNF5 dispatch、空 `--list-data` 失败。 |
-| Core fake integration | PARTIAL | `.omo/evidence/stage6-test-convergence-rerun-20261005.txt`、`.omo/evidence/stage6-hook-proof-20261005.log`、`.omo/evidence/core-read-matrix-final.txt`：所有 backend/read operation 可运行并有部分 typed plan/failure 覆盖；逐 backend exact argv、failure stderr、privilege/locale 全矩阵仍未完成。 |
+| Core fake integration | PASS | `.omo/evidence/stage6-1-headb8d966e-gate-review.md`、`.omo/evidence/read-matrix-last/target-tests-final.log`：所有 backend/read operation exact argv、逐 operation status/stderr failure、typed write plans、locale 和 privilege 矩阵通过。 |
 | Packtide/systide fake integration | PASS | 同一 Stage 6 证据覆盖 Snap/Brew/Nix update rows、hidden identity preview、optional failure 后继续，以及缺失 optional skip/多 provider failure；`native_fake_path` 补齐 APT/DNF5/Zypper/APK/XBPS catalog/install path。 |
 | Transaction generation/privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt`、`.omo/evidence/transaction-gate-live.txt`：Dnf5 使用 `dnf5`、Dnf4 使用 `dnf`，Snap refresh 为 elevated，system write 清理 loader 环境并通过 privilege runner。 |
 | 阶段 6 自动化测试 | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`：core/packtide/systide focused suites、fmt 和 diff check 通过。 |
