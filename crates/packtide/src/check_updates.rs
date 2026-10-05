@@ -410,6 +410,61 @@ mod native_update_tests {
     use system_tools_core::{NativePackageKey, PackageIdentity, PackageScope};
 
     #[test]
+    fn snap_provider_unknown_current_stays_absent_through_cache_round_trip() {
+        const CHILD: &str = "PACKTIDE_SNAP_UPDATE_CONTRACT_CHILD";
+        if env::var_os(CHILD).is_some() {
+            let updates = query_optional_updates();
+            assert_eq!(updates.len(), 1);
+            let update = &updates[0];
+            assert_eq!(update.identity.backend, BackendId::Snap);
+            assert_eq!(update.current, None);
+            assert_eq!(update.candidate.as_deref(), Some("2.0"));
+            let cache = UpdateCache::new().expect("open isolated update cache");
+            cache.write_repo_aur(&updates).expect("write update cache");
+            let cached = cache.read_repo_aur().expect("read update cache");
+            assert_eq!(cached[0].current, None);
+            assert_eq!(cached[0].candidate.as_deref(), Some("2.0"));
+            println!(
+                "snap current={:?}; candidate={:?}; cached current={:?}; cached candidate={:?}",
+                update.current, update.candidate, cached[0].current, cached[0].candidate
+            );
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let path = env::temp_dir().join(format!(
+            "packtide-snap-update-contract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).expect("create isolated provider fixture");
+        let snap = path.join("snap");
+        std::fs::write(
+            &snap,
+            "#!/bin/sh\nprintf 'Name Version Rev Publisher Notes\\ncore 2.0 123 canonical -\\n'\n",
+        )
+        .expect("write Snap fixture");
+        std::fs::set_permissions(&snap, std::fs::Permissions::from_mode(0o755))
+            .expect("make Snap fixture executable");
+        let output = Command::new(env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "check_updates::native_update_tests::snap_provider_unknown_current_stays_absent_through_cache_round_trip",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", &path)
+            .env("XDG_CACHE_HOME", path.join("cache"))
+            .output()
+            .expect("run isolated Snap update consumer");
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(output.status.success(), "{output:?}");
+        std::fs::remove_dir_all(path).expect("remove isolated provider fixture");
+    }
+
+    #[test]
     fn native_backend_sources_map_to_stable_picker_sources() {
         for (backend, source) in [
             (BackendId::Apt, PackageSource::Apt),

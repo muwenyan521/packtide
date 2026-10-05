@@ -34,6 +34,14 @@ fn parses_flatpak_application_and_version() {
 }
 
 #[test]
+fn preserves_unknown_current_version_as_absent() {
+    let updates = parse_updates(PackageSource::Snap, "core ? -> 2.0\n");
+
+    assert_eq!(updates[0].current, None);
+    assert_eq!(updates[0].candidate.as_deref(), Some("2.0"));
+}
+
+#[test]
 fn cache_round_trip_preserves_display_text() {
     let updates = parse_cached_updates(
         "pacman\tsystem\tlinux\tpacman\tlinux\t6.12\t6.13\tlinux 6.12 -> 6.13\n\

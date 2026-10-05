@@ -77,7 +77,7 @@ fn parse_versions(
     let arrow = parts.iter().position(|part| *part == "->");
     let current = arrow
         .and_then(|index| index.checked_sub(1))
-        .filter(|index| parts[*index] != name)
+        .filter(|index| parts[*index] != name && parts[*index] != "?")
         .map(|index| parts[index].to_owned());
     let candidate = explicit_candidate.or_else(|| {
         arrow
