@@ -104,6 +104,24 @@ pub(crate) fn select_install_catalog_streaming(
             {
                 writer_has_rows.store(true, Ordering::Release);
             }
+            let optional = crate::sources::optional_install_rows(&query, refresh)?;
+            if !optional.is_empty() {
+                if rows_started {
+                    stdin.write_all(b"\n")?;
+                }
+                for (index, record) in optional.iter().enumerate() {
+                    if index > 0 {
+                        stdin.write_all(b"\n")?;
+                    }
+                    super::rows::write_package_row(
+                        stdin,
+                        record,
+                        super::rows::PackageListMode::Install,
+                    )
+                    .context("failed writing optional package row to fzf")?;
+                }
+                writer_has_rows.store(true, Ordering::Release);
+            }
             timing_event("aur_done", source_started);
             Ok(())
         },

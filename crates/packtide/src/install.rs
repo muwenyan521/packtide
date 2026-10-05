@@ -9,7 +9,6 @@ use system_tools_core::{
 
 use crate::source_metadata::{PackageRoute, package_route};
 use crate::sources::install_catalog_for_backends;
-use crate::sources::install_rows;
 use crate::transaction::{execute_native, execute_package, execute_package_typed};
 use crate::ui::{parse_package_identity, parse_package_row, write_install_catalog};
 
@@ -87,8 +86,20 @@ fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result
     )?;
     let helper = crate::app::package_helper_for("package installation")?;
     if env::var_os("PACKTIDE_INSTALL_LIST_ONLY").is_some() {
-        let catalog = install_rows(&pacman, refresh)?;
-        write_install_catalog(&catalog, std::io::stdout().lock())?;
+        let catalog =
+            crate::sources::install_rows_streaming(&pacman, refresh, query, true, |_| Ok(()))?;
+        let mut output = std::io::stdout().lock();
+        write_install_catalog(&catalog, &mut output)?;
+        let optional = crate::sources::optional_install_rows(query, refresh)?;
+        if !optional.is_empty() {
+            use std::io::Write;
+            let rows =
+                crate::ui::render_package_rows(&optional, crate::ui::PackageListMode::Install);
+            if !catalog.records.is_empty() || !catalog.aur_names.trim().is_empty() {
+                output.write_all(b"\n")?;
+            }
+            output.write_all(rows.as_bytes())?;
+        }
         println!();
         return Ok(());
     }
@@ -128,6 +139,10 @@ fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result
     }
     let mut repo = Vec::new();
     let mut aur = Vec::new();
+    let resolver = ExecutableResolver::from_path(std::env::var_os("PATH").as_deref());
+    let registry = system_tools_core::BackendRegistry::default();
+    let mut optional: HashMap<(BackendId, PackageScope, CommandPrivilege), Vec<PackageIdentity>> =
+        HashMap::new();
     for row in selected.lines() {
         let Some(package) = parse_package_row(row) else {
             continue;
@@ -156,14 +171,26 @@ fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result
                     format!("{repository}/{name}")
                 });
             }
-            PackageRoute::Flatpak => bail!(
-                "{}: Flatpak rows are not valid in the package installer",
-                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
-            ),
-            PackageRoute::Other => bail!(
-                "{}: this package source is not available in the current picker",
-                crate::locale::text(crate::locale::current(), "backend.unsupported", &[])
-            ),
+            PackageRoute::Flatpak | PackageRoute::Other => {
+                let privilege = registry
+                    .backend(identity.backend)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("backend {} is not registered", identity.backend.as_str())
+                    })?
+                    .write_with_resolver(
+                        system_tools_core::WriteOperation::transaction(
+                            TransactionAction::Install,
+                            vec![identity.clone()],
+                        ),
+                        &resolver,
+                    )?
+                    .command
+                    .privilege;
+                optional
+                    .entry((identity.backend, identity.scope, privilege))
+                    .or_default()
+                    .push(identity);
+            }
         }
     }
     if !repo.is_empty() {
@@ -177,6 +204,9 @@ fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result
                 .map(|name| format!("aur/{name}"))
                 .collect::<Vec<_>>(),
         )?;
+    }
+    for ((_, _, _), identities) in optional {
+        execute_native(TransactionAction::Install, &identities)?;
     }
     Ok(())
 }
