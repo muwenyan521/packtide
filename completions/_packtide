@@ -1,0 +1,2 @@
+#compdef packtide
+_arguments '1:command:(check-updates install remove mirror-update downgrade sysup help)' '*:package or option:_files'

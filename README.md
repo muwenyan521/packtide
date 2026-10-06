@@ -122,6 +122,20 @@ packtide sysup          # legacy compatibility bridge to systide
 systide
 ```
 
+## 安装与发行
+
+GitHub Releases 提供包含 `packtide`、`systide` 及 SHA-256 校验文件的 Linux
+tarball。Arch Linux 用户可直接使用 [`packaging/packtide/PKGBUILD`](packaging/packtide/PKGBUILD)；
+源码用户可运行：
+
+```bash
+cargo install --path crates/packtide --locked
+cargo install --path crates/systide --locked
+```
+
+man page 和 Bash、Zsh、Fish 补全位于 [`man/`](man/) 与 [`completions/`](completions/)。
+安装说明和发行约定见 [`packaging/README.md`](packaging/README.md)。
+
 ## 包管理器矩阵
 
 矩阵工具只操作锁定 digest 的 disposable container；容器命令使用独立的 Podman

@@ -1,0 +1,2 @@
+#compdef systide
+_arguments '--list[show available updates]' '--ui-lang=[language]:language:(auto zh en)' '--news-source=[news source]' '--count=[news count]' '--help' '--version'

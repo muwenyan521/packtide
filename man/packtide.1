@@ -1,0 +1,32 @@
+.TH PACKTIDE 1 "2026-10-06" "packtide 0.1.0" "User Commands"
+.SH NAME
+packtide \- cross-distribution package management TUI and CLI
+.SH SYNOPSIS
+.B packtide
+[COMMAND] [OPTIONS] [QUERY...]
+.SH COMMANDS
+.TP
+.B check-updates [--refresh]
+Check available package updates.
+.TP
+.B install [QUERY...] [--refresh] [-y] [--no-ai]
+Install packages through the detected backend.
+.TP
+.B remove [QUERY...]
+Remove packages.
+.TP
+.B mirror-update [-c COUNTRY|--country COUNTRY]
+Update the package mirror configuration.
+.TP
+.B downgrade [QUERY...]
+Select package versions to downgrade.
+.TP
+.B sysup [-l|--list] [--ui-lang LANG] [--news-source SOURCE] [--count N]
+Run the legacy system-update bridge to systide.
+.SH OPTIONS
+.TP
+.B -h, --help
+Print help.
+.TP
+.B -V, --version
+Print version.
