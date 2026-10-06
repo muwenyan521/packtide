@@ -39,11 +39,22 @@ pub(crate) fn source_label(lang: Lang, source: &str) -> &'static str {
     msg(lang, key)
 }
 
-pub(crate) fn print_intro(lang: Lang) {
-    println!("\x1b[1;36m{}\x1b[0m", msg(lang, "intro"));
+pub(crate) fn print_intro(lang: Lang, native: system_tools_core::NativeBackend) {
+    let prefix = match native {
+        system_tools_core::NativeBackend::Pacman => "arch",
+        system_tools_core::NativeBackend::Apt => "apt",
+        system_tools_core::NativeBackend::Dnf => "dnf",
+        system_tools_core::NativeBackend::Zypper => "zypper",
+        system_tools_core::NativeBackend::Apk => "apk",
+        system_tools_core::NativeBackend::Xbps => "xbps",
+    };
+    println!("\x1b[1;36m{}\x1b[0m", msg(lang, &format!("intro.{prefix}")));
     println!("{}", msg(lang, "desc"));
     for index in 1..=6 {
-        println!("  {index}. {}", msg(lang, &format!("step_{index}")));
+        println!(
+            "  {index}. {}",
+            msg(lang, &format!("step_{prefix}_{index}"))
+        );
     }
 }
 
@@ -57,4 +68,20 @@ pub(crate) fn log_success(lang: Lang, text: &str) {
 
 pub(crate) fn log_warn(lang: Lang, text: &str) {
     println!("\x1b[1;33m[{}]\x1b[0m {text}", msg(lang, "label_warn"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apt_intro_is_not_arch_specific() {
+        let native = system_tools_core::NativeBackend::Apt;
+        let prefix = match native {
+            system_tools_core::NativeBackend::Apt => "apt",
+            _ => unreachable!(),
+        };
+        assert!(msg(Lang::En, &format!("intro.{prefix}")).contains("Debian/Ubuntu"));
+        assert!(!msg(Lang::En, &format!("step_{prefix}_3")).contains("Pacman"));
+    }
 }

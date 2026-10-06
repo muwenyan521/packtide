@@ -42,7 +42,8 @@ fn main() -> Result<()> {
             None => return Ok(()),
         }
     }
-    print_intro(lang);
+    let native = system_tools_core::detect_native_backend_from_file("/etc/os-release")?;
+    print_intro(lang, native);
     messages::log_info(lang, msg(lang, "permission"));
     require_privileged()?;
     let manager = detect_manager(lang)?;

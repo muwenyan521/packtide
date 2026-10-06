@@ -1,15 +1,50 @@
-intro=== Arch Linux System Update Assistant ===
+intro.arch=== Arch Linux System Update Assistant ===
+intro.apt=== Debian/Ubuntu System Update Assistant ===
+intro.dnf=== Fedora/RHEL System Update Assistant ===
+intro.zypper=== openSUSE System Update Assistant ===
+intro.apk=== Alpine System Update Assistant ===
+intro.xbps=== Void Linux System Update Assistant ===
 label_info=INFO
 label_success=OK
 label_warn=WARN
 label_error=ERROR
 desc=Actions to perform:
-step_1=Fetch latest Arch Linux news
-step_2=Check mirrorlist age and update if needed
-step_3=Sync Pacman DB and update GPG keyrings
-step_4=Upgrade system packages (interactive)
-step_5=Update Flatpak apps
-step_6=Regenerate GRUB config
+step_arch_1=Fetch latest Arch Linux news
+step_arch_2=Check mirrorlist age and update if needed
+step_arch_3=Sync Pacman DB and update GPG keyrings
+step_arch_4=Upgrade system packages (interactive)
+step_arch_5=Update Flatpak apps
+step_arch_6=Regenerate GRUB config
+step_apt_1=Fetch latest system news
+step_apt_2=Check mirrorlist age and update if needed
+step_apt_3=Refresh package metadata
+step_apt_4=Upgrade system packages
+step_apt_5=Update Flatpak apps
+step_apt_6=Regenerate GRUB config
+step_dnf_1=Fetch latest system news
+step_dnf_2=Check mirrorlist age and update if needed
+step_dnf_3=Refresh package metadata
+step_dnf_4=Upgrade system packages
+step_dnf_5=Update Flatpak apps
+step_dnf_6=Regenerate GRUB config
+step_zypper_1=Fetch latest system news
+step_zypper_2=Check mirrorlist age and update if needed
+step_zypper_3=Refresh package metadata
+step_zypper_4=Upgrade system packages
+step_zypper_5=Update Flatpak apps
+step_zypper_6=Regenerate GRUB config
+step_apk_1=Fetch latest system news
+step_apk_2=Check mirrorlist age and update if needed
+step_apk_3=Refresh package metadata
+step_apk_4=Upgrade system packages
+step_apk_5=Update Flatpak apps
+step_apk_6=Regenerate GRUB config
+step_xbps_1=Fetch latest system news
+step_xbps_2=Check mirrorlist age and update if needed
+step_xbps_3=Refresh package metadata
+step_xbps_4=Upgrade system packages
+step_xbps_5=Update Flatpak apps
+step_xbps_6=Regenerate GRUB config
 cancel=Update cancelled.
 confirm=Proceed with %s? [Y/n]
 invalid_ui_lang=--ui-lang must be auto, zh, or en

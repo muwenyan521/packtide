@@ -84,7 +84,13 @@ pub fn package_upgrade_command(
         },
         BackendId::Nix => PackageUpgradeCommand {
             program: "nix",
-            args: &["profile", "upgrade", ".*"],
+            args: &[
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "profile",
+                "upgrade",
+                ".*",
+            ],
             privilege: PackageUpgradePrivilege::User,
         },
     };
@@ -239,6 +245,21 @@ mod tests {
         assert_eq!(command.program, "snap");
         assert_eq!(command.args, ["refresh"]);
         assert_eq!(command.privilege, PackageUpgradePrivilege::Elevated);
+    }
+
+    #[test]
+    fn package_upgrade_command_enables_nix_command_features() {
+        let command = package_upgrade_command(BackendId::Nix).expect("nix is supported");
+        assert_eq!(
+            command.args,
+            [
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "profile",
+                "upgrade",
+                ".*"
+            ]
+        );
     }
 
     #[test]

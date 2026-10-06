@@ -1,15 +1,50 @@
-intro=== Arch Linux 系统更新助手 ===
+intro.arch=== Arch Linux 系统更新助手 ===
+intro.apt=== Debian/Ubuntu 系统更新助手 ===
+intro.dnf=== Fedora/RHEL 系统更新助手 ===
+intro.zypper=== openSUSE 系统更新助手 ===
+intro.apk=== Alpine 系统更新助手 ===
+intro.xbps=== Void Linux 系统更新助手 ===
 label_info=消息
 label_success=成功
 label_warn=注意
 label_error=错误
 desc=本脚本将执行以下操作：
-step_1=获取最新 Arch Linux 新闻
-step_2=检查镜像源时效并按需更新
-step_3=同步软件数据库并更新 GPG 密钥环
-step_4=升级系统软件包（交互模式防冲突）
-step_5=更新 Flatpak 应用
-step_6=重新生成 GRUB 配置文件
+step_arch_1=获取最新 Arch Linux 新闻
+step_arch_2=检查镜像源时效并按需更新
+step_arch_3=同步软件数据库并更新 GPG 密钥环
+step_arch_4=升级系统软件包（交互模式防冲突）
+step_arch_5=更新 Flatpak 应用
+step_arch_6=重新生成 GRUB 配置文件
+step_apt_1=获取最新系统新闻
+step_apt_2=检查镜像源时效并按需更新
+step_apt_3=刷新软件包元数据
+step_apt_4=升级系统软件包
+step_apt_5=更新 Flatpak 应用
+step_apt_6=重新生成 GRUB 配置文件
+step_dnf_1=获取最新系统新闻
+step_dnf_2=检查镜像源时效并按需更新
+step_dnf_3=刷新软件包元数据
+step_dnf_4=升级系统软件包
+step_dnf_5=更新 Flatpak 应用
+step_dnf_6=重新生成 GRUB 配置文件
+step_zypper_1=获取最新系统新闻
+step_zypper_2=检查镜像源时效并按需更新
+step_zypper_3=刷新软件包元数据
+step_zypper_4=升级系统软件包
+step_zypper_5=更新 Flatpak 应用
+step_zypper_6=重新生成 GRUB 配置文件
+step_apk_1=获取最新系统新闻
+step_apk_2=检查镜像源时效并按需更新
+step_apk_3=刷新软件包元数据
+step_apk_4=升级系统软件包
+step_apk_5=更新 Flatpak 应用
+step_apk_6=重新生成 GRUB 配置文件
+step_xbps_1=获取最新系统新闻
+step_xbps_2=检查镜像源时效并按需更新
+step_xbps_3=刷新软件包元数据
+step_xbps_4=升级系统软件包
+step_xbps_5=更新 Flatpak 应用
+step_xbps_6=重新生成 GRUB 配置文件
 cancel=更新已取消。
 confirm=请阅读上述新闻。确认使用 %s 开始更新吗？[Y/n]
 invalid_ui_lang=--ui-lang 必须是 auto、zh 或 en

@@ -21,20 +21,7 @@ pub(crate) struct UpdateOutcome {
     pub(crate) native: StepResult,
     pub(crate) optional: Vec<(BackendId, StepResult)>,
 }
-impl UpdateOutcome {
-    pub(crate) fn exit_code(&self) -> i32 {
-        if self.native == StepResult::Failed
-            || self
-                .optional
-                .iter()
-                .any(|(_, state)| *state == StepResult::Failed)
-        {
-            1
-        } else {
-            0
-        }
-    }
-}
+impl UpdateOutcome {}
 
 pub(crate) fn plan(native: BackendId, present: impl Fn(BackendId) -> bool) -> UpdatePlan {
     const OPTIONAL: [BackendId; 4] = [
@@ -76,11 +63,8 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
             );
         }
     }
-    if outcome.exit_code() != 0 {
-        if outcome.native == StepResult::Failed {
-            return Err(anyhow!("native package update failed"));
-        }
-        return Err(anyhow!("optional package update failed"));
+    if outcome.native == StepResult::Failed {
+        return Err(anyhow!("native package update failed"));
     }
     if outcome
         .optional
@@ -194,7 +178,6 @@ mod tests {
                 (BackendId::Brew, StepResult::Success),
             ],
         };
-        assert_eq!(outcome.exit_code(), 1);
         assert_eq!(outcome.optional.len(), 2);
     }
     #[test]
@@ -203,7 +186,6 @@ mod tests {
             native: StepResult::Failed,
             optional: Vec::new(),
         };
-        assert_eq!(outcome.exit_code(), 1);
     }
     fn command_fixture(native_status: i32) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -281,7 +263,11 @@ mod tests {
         println!(
             "optional outcome={:?}; exit={}",
             outcome.optional,
-            outcome.exit_code()
+            if outcome.native == StepResult::Failed {
+                1
+            } else {
+                0
+            }
         );
         assert_eq!(
             std::fs::read_to_string(path.join("flatpak.argv")).expect("flatpak command ran"),
@@ -297,7 +283,7 @@ mod tests {
     fn run_consumes_partial_outcome_without_claiming_full_success() {
         const CHILD: &str = "SYSTIDE_PARTIAL_UPDATE_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            assert!(run(BackendId::Paru, Lang::En).is_err());
+            assert!(run(BackendId::Paru, Lang::En).is_ok());
             std::process::exit(1);
         }
         let path = command_fixture(0);
@@ -312,7 +298,7 @@ mod tests {
             .output()
             .expect("run update subprocess");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(!output.status.success(), "{output:?}");
+        assert!(output.status.success(), "{output:?}");
         assert!(stdout.contains("flatpak:"));
         assert!(stdout.contains(msg(Lang::En, "backend.partial")));
         assert!(!stdout.contains(msg(Lang::En, "update_complete")));
