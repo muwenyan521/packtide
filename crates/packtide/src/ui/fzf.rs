@@ -140,7 +140,7 @@ fn timing_event(phase: &str, started: Instant) {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn query_reload_bind(executable: &std::path::Path, refresh: bool) -> String {
     format!(
-        "change:reload({})",
+        "change:reload-sync({})",
         query_reload_command(executable, refresh)
     )
 }
@@ -149,7 +149,7 @@ fn query_reload_command(executable: &std::path::Path, refresh: bool) -> String {
     let executable = shell_quote(executable.to_string_lossy().as_ref());
     let script = shell_quote(include_str!("query_reload.sh"));
     let refresh = if refresh { "refresh" } else { "cached" };
-    format!("bash -c {script} {executable} {{q}} {refresh}")
+    format!("exec bash -c {script} {executable} {{q}} {refresh}")
 }
 
 fn push_wrapped_item(output: &mut String, line_width: &mut usize, item: &str, columns: usize) {
@@ -226,7 +226,7 @@ fn select_rows_with_input(
         query_reload_command(&executable, true)
     };
     let reload = format!(
-        "ctrl-r:change-prompt({})+reload({reload_command})",
+        "ctrl-r:change-prompt({})+reload-sync({reload_command})",
         crate::locale::text(
             lang,
             if removing {
@@ -380,9 +380,7 @@ fn select_rows_with_input(
     });
     let output = child.wait_with_output()?;
     if let Some(state) = query_state {
-        let lock = state.with_extension("lock");
         let _ = fs::remove_file(&state);
-        let _ = fs::remove_dir_all(lock);
     }
     match writer_rx.recv_timeout(std::time::Duration::from_millis(50)) {
         Ok(Err(error))
@@ -480,15 +478,14 @@ mod tests {
     #[test]
     fn query_reload_binding_trims_debounces_and_restores_initial_rows() {
         let bind = query_reload_bind(std::path::Path::new("/tmp/packtide"), true);
-        assert!(bind.starts_with("change:reload(bash -c 'set -eu"));
+        assert!(bind.starts_with("change:reload-sync(exec bash -c 'set -eu"));
         assert!(bind.contains("sleep 0.3"));
         assert!(bind.contains("s/^[[:space:]]*//"));
         assert!(bind.contains("s/[[:space:]]*$//"));
         assert!(bind.contains("${#q}\" -ge 2"));
         assert!(bind.contains("PACKTIDE_INSTALL_LIST_ONLY=1"));
         assert!(bind.contains("PACKTIDE_QUERY_STATE"));
-        assert!(bind.contains("setsid"));
-        assert!(bind.contains("kill -TERM -- \"-$child\""));
+        assert!(bind.contains("kill -TERM -- \"-$$\""));
         assert!(bind.contains("while kill -0 \"$child\""));
         assert!(bind.contains("[ \"$current\" != \"$generation\" ]"));
         assert!(bind.contains("current=$(cat \"$state\""));

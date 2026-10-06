@@ -1,6 +1,7 @@
 use super::query_reload_bind;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,7 +29,7 @@ impl Fixture {
     fn command(&self, query: &str, refresh: bool) -> Command {
         let bind = query_reload_bind(&self.0.join("provider"), refresh);
         let command = bind
-            .strip_prefix("change:reload(")
+            .strip_prefix("change:reload-sync(")
             .unwrap()
             .strip_suffix(')')
             .unwrap();
@@ -36,6 +37,7 @@ impl Fixture {
         let mut shell = Command::new("sh");
         shell
             .args(["-c", &command])
+            .process_group(0)
             .env("PACKTIDE_QUERY_STATE", self.0.join("state"));
         shell.env("QUERY_FIXTURE", &self.0);
         shell
@@ -52,6 +54,58 @@ impl Fixture {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+#[test]
+fn query_reload_provider_stays_in_fzf_cancellation_group() {
+    // Given: fzf owns the reload shell's process group and kills that group.
+    let fixture = Fixture::new("#!/bin/sh\nps -o pgid= -p $$\n");
+    // When: the generated reload command starts its provider.
+    let child = fixture
+        .command("hello", false)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let output = child.wait_with_output().unwrap();
+    // Then: the provider cannot survive fzf killing the reload process group.
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        group.to_string()
+    );
+}
+
+#[test]
+fn query_reload_does_not_wait_for_a_lock_left_by_forceful_cancellation() {
+    // Given: an earlier reload was killed while holding the generation lock.
+    let fixture = Fixture::new("#!/bin/sh\nprintf 'fresh rows\\n'\n");
+    fs::create_dir(fixture.0.join("state.lock")).unwrap();
+    let mut child = fixture
+        .command("hello", false)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // When: a newer query is submitted after the forceful cancellation.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let finished = loop {
+        if child.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", child.id())])
+                .status()
+                .unwrap();
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = child.wait_with_output().unwrap();
+    // Then: stale lock state cannot block the next query.
+    assert!(finished, "reload waited for an abandoned generation lock");
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(output.stdout, b"fresh rows\n");
 }
 
 impl Drop for Fixture {
@@ -153,7 +207,7 @@ fn query_reload_debounces_superseded_queries_before_provider_spawn() {
     };
     let old = spawn("old");
     let started = Instant::now();
-    while fs::read_to_string(fixture.0.join("state")).unwrap() != "1\n" {
+    while fs::read_to_string(fixture.0.join("state")).unwrap().trim() != old.id().to_string() {
         assert!(started.elapsed() < Duration::from_secs(5));
         std::thread::sleep(Duration::from_millis(10));
     }
