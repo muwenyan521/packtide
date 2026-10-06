@@ -139,10 +139,7 @@ fn timing_event(phase: &str, started: Instant) {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn query_reload_bind(executable: &std::path::Path, refresh: bool) -> String {
-    format!(
-        "change:reload({})",
-        query_reload_command(executable, refresh)
-    )
+    format!("zero:reload({})", query_reload_command(executable, refresh))
 }
 
 fn query_reload_command(executable: &std::path::Path, refresh: bool) -> String {
@@ -474,7 +471,7 @@ mod tests {
     #[test]
     fn query_reload_binding_trims_debounces_and_restores_initial_rows() {
         let bind = query_reload_bind(std::path::Path::new("/tmp/packtide"), true);
-        assert!(bind.starts_with("change:reload(exec bash -c 'set -eu"));
+        assert!(bind.starts_with("zero:reload(exec bash -c 'set -eu"));
         assert!(bind.contains("sleep 0.3"));
         assert!(bind.contains("s/^[[:space:]]*//"));
         assert!(bind.contains("s/[[:space:]]*$//"));

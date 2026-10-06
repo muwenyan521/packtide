@@ -29,7 +29,7 @@ impl Fixture {
     fn command(&self, query: &str, refresh: bool) -> Command {
         let bind = query_reload_bind(&self.0.join("provider"), refresh);
         let command = bind
-            .strip_prefix("change:reload(")
+            .strip_prefix("zero:reload(")
             .or_else(|| bind.strip_prefix("change:reload-sync("))
             .unwrap()
             .strip_suffix(')')
