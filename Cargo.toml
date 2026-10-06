@@ -9,8 +9,9 @@ members = [
 
 [workspace.package]
 edition = "2024"
-license = "MIT"
+license = "MPL-2.0"
 version = "0.1.0"
+rust-version = "1.88"
 
 [profile.release]
 lto = "thin"

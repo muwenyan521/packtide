@@ -1,46 +1,49 @@
+English | [简体中文](package-manager-support.zh-CN.md)
+
 # Package-manager support
 
-This page is the runtime contract for the package-manager expansion. It describes which
-binary is resolved, which scope is touched, and which user-facing command owns the action.
-The matrix runner is a disposable integration check; it is not a second implementation of
-the backend.
+This is the runtime contract for package-manager support. It records which executable is
+resolved, which scope a command touches, and where the operation is exposed. The matrix runner
+only checks the contract; it does not implement a second backend.
 
 ## Backend families
 
 | Family | `BackendId` | Scope | Runtime command(s) | Update argv | Status |
 | --- | --- | --- | --- | --- | --- |
 | Arch native | `Pacman` | system | `pacman` (+ `sudo` for writes) | `pacman -Su` | `packtide` and `systide` |
-| Debian native | `Apt` | system | `apt-get`, `apt-cache`, `dpkg-query` | `apt-get upgrade -y` | `systide` native update; core contract |
-| Fedora/RHEL native | `Dnf5` | system | `dnf5` (+ `rpm`) | `dnf5 upgrade -y` | `systide` native update; Fedora lane |
-| Fedora/RHEL legacy | `Dnf4` | system | `dnf` (+ `rpm`) | `dnf upgrade -y` | `systide` native update; Rocky/Alma lanes |
-| SUSE native | `Zypper` | system | `zypper` | `zypper update -y` | `systide` native update |
-| Alpine native | `Apk` | system | `apk` | `apk upgrade` | `systide` native update |
-| Void native | `Xbps` | system | `xbps-query`, `xbps-install`, `xbps-remove` | `xbps-install -Su` | `systide` native update |
+| Debian native | `Apt` | system | `apt-get`, `apt-cache`, `dpkg-query` | `apt-get upgrade -y` | native picker and `systide` update |
+| Fedora/RHEL native | `Dnf5` | system | `dnf5` (+ `rpm`) | `dnf5 upgrade -y` | native picker and `systide` update; Fedora lane |
+| Fedora/RHEL legacy | `Dnf4` | system | `dnf` (+ `rpm`) | `dnf upgrade -y` | native picker and `systide` update; Rocky/Alma lanes |
+| SUSE native | `Zypper` | system | `zypper` | `zypper update -y` | native picker and `systide` update |
+| Alpine native | `Apk` | system | `apk` | `apk upgrade` | native picker and `systide` update |
+| Void native | `Xbps` | system | `xbps-query`, `xbps-install`, `xbps-remove` | `xbps-install -Su` | native picker and `systide` update |
 | Arch user | `Paru`, `Yay` | user/AUR | `paru` or `yay` | helper-specific | `packtide` Arch path |
 | Flatpak | `Flatpak` | user/system | `flatpak` | `flatpak update -y` | optional `systide` step |
 | Snap | `Snap` | system | `snap` | `snap refresh` | optional `systide` step; VM lane |
 | Linuxbrew | `Brew` | profile | `brew` | `brew upgrade` | optional `systide` step; formulae |
 | Nix | `Nix` | profile | `nix` | `nix profile upgrade .*` | optional `systide` step |
 
-The runtime resolver checks PATH and the native distribution identity. Missing optional
-commands are reported as skipped; a missing native command is an actionable error. Elevated
-system operations use the command-plan privilege boundary and scrub loader-related
-environment variables before invoking `sudo`.
+The resolver checks `PATH` and the native distribution identity. Missing optional commands are
+skipped. A missing native command is an error. System operations go through the command-plan
+privilege boundary, with loader-related variables removed before `sudo` runs.
 
 ## User-facing behavior
 
 `packtide` retains its Arch-compatible interactive surface while routing detected non-Arch
-native installs, removals, and update reads through the typed backend registry. `mirror-update`,
-`downgrade`, and the Arch `packtide sysup` compatibility bridge remain Arch-specific; they do
-not become generic APT/DNF/Zypper/APK/XBPS commands. Optional Snap/Brew/Nix rows are available
+native installs, removals, and update reads through the typed backend registry. `mirror-update`
+and `downgrade` remain Arch-specific; they do not become generic APT/DNF/Zypper/APK/XBPS
+commands. The `packtide sysup` compatibility bridge forwards to `systide` on all supported
+distributions. Optional Snap/Brew/Nix rows are available
 in the non-Arch native picker when the provider command is present, but are not added to the
 Arch picker. `packtide sysup` only forwards to `systide`; it does not maintain another update
 implementation.
 
 `systide` detects one native backend, runs its upgrade, and then attempts present optional
 backends in this order: Flatpak, Snap, Brew, Nix. It records each step, continues after an
-optional failure, and exits non-zero when the native step or any attempted optional step
-fails. AUR helpers are intentionally outside this list. Arch-only keyring and GRUB/Waybar
+optional failure, and exits non-zero when the native step fails. Optional failures are
+warning-only: after a successful native update, they do not change exit status 0.
+Native failure stops the sequence before optional providers are attempted.
+AUR helpers are intentionally outside this list. Arch-specific keyring and GRUB/Waybar
 finish hooks are conditional on their command/files being present.
 
 The typed backend contract separates catalog, search, installed, details, updates, install,
@@ -50,7 +53,7 @@ system-scoped and reject local `.snap`/`--dangerous` sources. Brew casks are not
 runtime target; the Brew lane validates formula operations only. Nix transactions are
 profile-scoped and do not mutate the system store. The Arch picker remains limited to
 Pacman/AUR/Flatpak; detection or matrix coverage for another backend does not imply support for
-an unrelated Arch-only command.
+an unrelated Arch-specific command.
 
 ## Picker UI contract
 
@@ -80,26 +83,16 @@ system-scoped and its install/remove/refresh plans are also `Elevated`. The `sys
 commands are therefore `dnf5 upgrade -y` for DNF5, `dnf upgrade -y` for DNF4, and `snap refresh`
 for Snap. Unsupported capabilities fail before command execution.
 
-## Verification status
+## Verification boundary
 
-The following status is the recorded state for the current source line (`HEAD`
-`b8d966e1b0731620559d1ee6ba077f811f1ff8be`). Evidence files are observations, not replacement
-implementations or plan checkboxes.
+Unit and fake-command tests cover typed identities, exact argv, provider diagnostics, locale,
+privilege, and picker rendering. They do not prove that every real backend operation works on
+every distribution. Local development logs are not release evidence.
 
-| Area | Status | Evidence and boundary |
-| --- | --- | --- |
-| Stage 5.1-5.3 update/list contract | PASS | `.omo/evidence/stage5-gate-review-current.md` and `.omo/evidence/stage5-contract-final.md`: typed current/candidate values, native-first/optional-after-native outcomes, DNF generation dispatch, provider failures, and empty `--list-data` failure. |
-| Core fake command integration | PASS | `.omo/evidence/stage6-1-headb8d966e-gate-review.md`, `.omo/evidence/read-matrix-last/target-tests-final.log`: all backend/read operations exact argv, per-operation status/stderr failure, typed write plans, locale and privilege matrix coverage passed. |
-| Packtide/systide fake integration | PASS | The same Stage 6 evidence records `packtide` optional provider rows/preview identity and `systide` optional ordering/failure continuation tests; current HEAD includes the provider parallel-read commit `f0b7ecf`. |
-| Transaction generation and privilege | PASS | `.omo/evidence/transaction-gate-receipt-20261005.txt` and `.omo/evidence/transaction-gate-live.txt`: exact DNF4/DNF5 executable selection, elevated Snap refresh, typed plans, environment scrubbing, and 106 core tests. |
-| Stage 6 automated convergence | PASS | `.omo/evidence/stage6-test-convergence-20261005.md`: focused core/packtide/systide suites, formatting, and diff checks passed. |
-| Stage 6 real UI flow | PARTIAL | `.omo/evidence/phase6-systide-ui-smoke-20261001.md` and its PTY captures prove English/Chinese cancellation and 80x24 layout. No real privileged package transaction, mirror-warning, or partial-upgrade flow was run. |
-| Disposable matrix | ENVIRONMENT-BLOCKED | Locked image metadata and cleanup are recorded in `.omo/evidence/wave1-final-matrix/`; the functional run `.omo/evidence/wave1-todo2-network-retry/all-2.jsonl` records repository/registry TLS failures, Snap cloud-image download failure, and non-zero aggregate status. These failures remain failures, not passes. |
-
-The UI and fake-command evidence does not authorize destructive host transactions. A full matrix
-claim requires a network-capable environment with the locked images/repositories and a working
-Snap cloud-image path; rerun `all` and `audit-cleanup` together and retain both JSON evidence and
-cleanup output.
+A release claiming matrix coverage must retain the source commit, locked image metadata,
+JSON results, and cleanup output for the same run. Network failures, unavailable VM tools,
+and incomplete guest probes remain failures or environment limitations, never passes.
+Real TUI acceptance and privileged transactions need separate disposable-environment checks.
 
 ## Disposable matrix
 
@@ -134,9 +127,9 @@ From the repository root:
 ```bash
 cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- doctor
 cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- list-images
-cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- all --evidence .omo/evidence/package-manager-matrix.jsonl
-cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- single --backend fedora --evidence .omo/evidence/fedora.json
-cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- probe-nix --evidence .omo/evidence/nix.json
+cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- all --evidence evidence/package-manager-matrix.jsonl
+cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- single --backend fedora --evidence evidence/fedora.json
+cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- probe-nix --evidence evidence/nix.json
 cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- verify-cloud-image
 cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- vm-run
 cargo run --manifest-path tools/package-manager-matrix/Cargo.toml -- vm-interrupt-test

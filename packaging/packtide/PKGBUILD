@@ -3,9 +3,10 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Package and system maintenance tools'
 arch=('x86_64')
-url='https://github.com/wangxianming/shorin-contrib'
-license=('MIT')
-depends=('fzf' 'pacman' 'sudo')
+url='https://github.com/muwenyan521/packtide'
+license=('MPL-2.0')
+depends=('fzf>=0.74.0' 'pacman' 'sudo')
+makedepends=('cargo' 'git')
 optdepends=(
   'paru: AUR package helper'
   'yay: alternative AUR package helper'
@@ -16,22 +17,18 @@ optdepends=(
   'pacman-contrib: checkupdates command'
   'waybar: update signal refresh'
 )
+# Replace this URL with the maintainer's canonical public source before submission.
 source=()
 sha256sums=()
 
+_srcdir="$startdir/../.."
+
 build() {
+  cd "$_srcdir"
   cargo build --release --locked --workspace
 }
 
 package() {
-  install -Dm755 target/release/packtide "$pkgdir/usr/bin/packtide"
-  install -Dm755 target/release/systide "$pkgdir/usr/bin/systide"
-  install -Dm644 man/packtide.1 "$pkgdir/usr/share/man/man1/packtide.1"
-  install -Dm644 man/systide.1 "$pkgdir/usr/share/man/man1/systide.1"
-  install -Dm644 completions/packtide.bash "$pkgdir/usr/share/bash-completion/completions/packtide"
-  install -Dm644 completions/systide.bash "$pkgdir/usr/share/bash-completion/completions/systide"
-  install -Dm644 completions/_packtide "$pkgdir/usr/share/zsh/site-functions/_packtide"
-  install -Dm644 completions/_systide "$pkgdir/usr/share/zsh/site-functions/_systide"
-  install -Dm644 completions/packtide.fish "$pkgdir/usr/share/fish/vendor_completions.d/packtide.fish"
-  install -Dm644 completions/systide.fish "$pkgdir/usr/share/fish/vendor_completions.d/systide.fish"
+  cd "$_srcdir"
+  DESTDIR="$pkgdir" PREFIX=/usr ./packaging/install.sh
 }

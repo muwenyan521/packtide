@@ -21,7 +21,11 @@ pub(crate) struct UpdateOutcome {
     pub(crate) native: StepResult,
     pub(crate) optional: Vec<(BackendId, StepResult)>,
 }
-impl UpdateOutcome {}
+impl UpdateOutcome {
+    fn native_succeeded(&self) -> bool {
+        self.native == StepResult::Success
+    }
+}
 
 pub(crate) fn plan(native: BackendId, present: impl Fn(BackendId) -> bool) -> UpdatePlan {
     const OPTIONAL: [BackendId; 4] = [
@@ -63,7 +67,7 @@ pub(crate) fn run(backend: BackendId, lang: Lang) -> Result<()> {
             );
         }
     }
-    if outcome.native == StepResult::Failed {
+    if !outcome.native_succeeded() {
         return Err(anyhow!("native package update failed"));
     }
     if outcome
@@ -170,7 +174,7 @@ mod tests {
         assert_eq!(plan.optional, &[BackendId::Flatpak, BackendId::Brew]);
     }
     #[test]
-    fn failure_outcome_is_nonzero_without_hiding_later_steps() {
+    fn optional_failure_preserves_native_success_and_later_steps() {
         let outcome = UpdateOutcome {
             native: StepResult::Success,
             optional: vec![
@@ -178,6 +182,7 @@ mod tests {
                 (BackendId::Brew, StepResult::Success),
             ],
         };
+        assert!(outcome.native_succeeded());
         assert_eq!(outcome.optional.len(), 2);
     }
     #[test]
@@ -186,6 +191,7 @@ mod tests {
             native: StepResult::Failed,
             optional: Vec::new(),
         };
+        assert!(!outcome.native_succeeded());
     }
     fn command_fixture(native_status: i32) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -259,7 +265,7 @@ mod tests {
                 (BackendId::Snap, StepResult::Success)
             ]
         );
-        assert_eq!(outcome.exit_code(), 1);
+        assert!(outcome.native_succeeded());
         println!(
             "optional outcome={:?}; exit={}",
             outcome.optional,
@@ -284,7 +290,7 @@ mod tests {
         const CHILD: &str = "SYSTIDE_PARTIAL_UPDATE_CHILD";
         if std::env::var_os(CHILD).is_some() {
             assert!(run(BackendId::Paru, Lang::En).is_ok());
-            std::process::exit(1);
+            return;
         }
         let path = command_fixture(0);
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))

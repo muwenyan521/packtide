@@ -1,0 +1,32 @@
+.TH PACKTIDE 1 "2026-10-06" "packtide 0.1.0" "用户命令"
+.SH 名称
+packtide \- 跨发行版软件包管理 TUI 和 CLI
+.SH 概要
+.B packtide
+[COMMAND] [OPTIONS] [QUERY...]
+.SH 命令
+.TP
+.B check-updates [--refresh]
+检查可用的软件包更新。
+.TP
+.B install [QUERY...] [--refresh] [-y] [--no-ai]
+通过检测到的后端安装软件包。
+.TP
+.B remove [QUERY...]
+删除软件包。
+.TP
+.B mirror-update [-c COUNTRY|--country COUNTRY]
+更新软件包镜像配置。
+.TP
+.B downgrade [QUERY...]
+选择要降级的软件包版本。
+.TP
+.B sysup [-l|--list] [--ui-lang LANG] [--news-source SOURCE] [--count N]
+运行转发到 systide 的系统更新入口。
+.SH 选项
+.TP
+.B -h, --help
+显示帮助。
+.TP
+.B -V, --version
+显示版本。

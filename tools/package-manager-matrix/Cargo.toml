@@ -3,6 +3,8 @@ name = "package-manager-matrix"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+description = "Disposable package-manager and VM compatibility matrix runner"
 
 [dependencies]
 anyhow = "1"

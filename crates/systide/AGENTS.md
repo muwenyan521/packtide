@@ -1,7 +1,7 @@
 # systide
 
 ## OVERVIEW
-`systide` is the system update orchestrator. It detects one native backend, runs the native update, then attempts available optional providers while preserving diagnostics and a non-zero final result on attempted failure.
+`systide` is the system update orchestrator. It detects one native backend, runs the native update, then attempts available optional providers while preserving diagnostics. Native failure is fatal; optional failure is reported but does not turn a successful native update into a failed command.
 
 ## STRUCTURE
 ```text
@@ -25,7 +25,7 @@ tests/                       # CLI and orchestration integration contracts
 
 ## CONVENTIONS
 - `--ui-lang auto|zh|en` uses `LC_ALL`, then `LC_MESSAGES`, then `LANG`.
-- Optional providers are attempted only when their executable exists; an attempted failure is retained and makes the final result non-zero.
+- Optional providers are attempted only when their executable exists; an attempted failure is retained in diagnostics while the native result remains the exit-status contract.
 - AUR helpers are not part of the automatic update list.
 - Arch-only news, mirror, snapshot, GRUB, and Waybar hooks remain conditional and must not run for unrelated native backends.
 

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-10-06
-**Base commit:** `557b254`
+**Base commit:** historical repository baseline; verify current behavior against source and tests
 **Branch:** `master`
 
 ## OVERVIEW
@@ -53,7 +53,7 @@ commands/               # release checksum record
 ## ANTI-PATTERNS
 - Do not route a request to a different backend merely because the requested backend lacks a capability.
 - Do not infer transaction identity from a visible picker label; preserve `BackendId`, scope, kind, native key, and provider metadata in the hidden token.
-- Do not make optional-provider absence or failure look like success; missing optional tools may be skipped, attempted failures must remain in the outcome and affect the final status.
+- Optional-provider absence is skipped. Attempted optional failures remain visible in diagnostics, but a successful native update still returns success; native failure is fatal.
 - Do not run package-manager matrix probes against floating image tags, host package state, host `/`, or host `sudo`.
 - Do not claim a real UI, privileged transaction, or disposable matrix lane passed without running that path.
 
@@ -72,6 +72,6 @@ For a focused change, use `cargo test -p system-tools-core`, `cargo test -p pack
 
 ## NOTES
 - `packtide sysup` is a compatibility bridge to `systide`, not a second update implementation.
-- Arch-only mirror, downgrade, and picker behavior must not be generalized into unrelated native backends.
+- Arch-only mirror and downgrade behavior must not be generalized into unrelated native backends. The package picker also supports detected native backends and optional providers through capability checks.
 - Release binaries are `target/release/packtide` and `target/release/systide`; release settings use thin LTO, stripped symbols, and abort-on-panic.
 - The support contract is documented in `docs/package-manager-support.md`; update it when user-visible backend scope or command behavior changes.

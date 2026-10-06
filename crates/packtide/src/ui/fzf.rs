@@ -303,6 +303,7 @@ fn select_rows_with_input(
     if let Some(state) = &query_state {
         fs::write(state, "0").context("cannot initialize query generation state")?;
     }
+    let query_reload = (!removing).then(|| query_reload_bind(&executable, true));
     let mut args = vec!["--multi"];
     args.extend_from_slice(COMMON_FZF_LAYOUT_ARGS);
     args.extend([
@@ -334,6 +335,9 @@ fn select_rows_with_input(
         "--bind",
         load_bind.as_str(),
     ]);
+    if let Some(query_reload) = query_reload.as_deref() {
+        args.extend(["--bind", query_reload]);
+    }
     if removing {
         args.extend(["--bind", "alt-c:accept"]);
     }

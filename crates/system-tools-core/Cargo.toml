@@ -2,7 +2,9 @@
 name = "system-tools-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+description = "Typed package-manager backends, command plans, and privilege boundaries"
 
 [dependencies]
 anyhow = "1"

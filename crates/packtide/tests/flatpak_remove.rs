@@ -1250,6 +1250,7 @@ fn sysup_compatibility_bridge_reports_systide_dependency() {
         error.contains("No AUR helper found")
             || error.contains("required command 'systide'")
             || error.contains("Required package manager command is unavailable")
+            || error.contains("systide system update exited")
     );
 }
 

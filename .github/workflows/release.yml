@@ -9,12 +9,26 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container: debian:bookworm
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release --locked
+      - name: Install build toolchain
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential ca-certificates curl pkg-config python3 tar
+          fzf_version=0.74.4
+          curl --fail --location --silent --show-error \
+            "https://github.com/junegunn/fzf/releases/download/v${fzf_version}/fzf-${fzf_version}-linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin fzf
+          chmod 0755 /usr/local/bin/fzf
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - name: Build on Debian 12
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --workspace --release --locked
+          python3 packaging/verify-version.py
+          bash packaging/check-release-artifacts.sh
       - name: Package release
         shell: bash
         run: |
@@ -23,10 +37,36 @@ jobs:
           dir="shorin-contrib-${version}-x86_64-unknown-linux-gnu"
           mkdir -p "$dir"
           install -m 0755 target/release/packtide target/release/systide "$dir/"
-          cp README.md "$dir/"
+          cp README.md README.zh-CN.md CONTRIBUTING.md CONTRIBUTING.zh-CN.md SECURITY.md SECURITY.zh-CN.md "$dir/"
+          mkdir -p "$dir/docs"
+          cp docs/package-manager-support.md docs/package-manager-support.zh-CN.md docs/releasing.md docs/releasing.zh-CN.md "$dir/docs/"
+          cp man/*.1 "$dir/"
+          cp completions/* "$dir/"
+          mkdir -p "$dir/packaging"
+          cp packaging/README.md packaging/README.zh-CN.md "$dir/packaging/"
+          for file in LICENSE NOTICE.md; do test ! -e "$file" || cp "$file" "$dir/"; done
+          printf 'version=%s\ncommit=%s\ntarget=x86_64-unknown-linux-gnu\n' "$version" "$GITHUB_SHA" > "$dir/PROVENANCE"
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes "shorin-contrib-"*.tar.gz "shorin-contrib-"*.sha256
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'Content-Type: application/json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases" \
+            -d "$(python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["GITHUB_REF_NAME"],"generate_release_notes":True}))')")
+          upload_url=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{",1)[0])' <<<"$response")
+          for asset in shorin-contrib-*.tar.gz shorin-contrib-*.sha256; do
+            curl --fail-with-body -sS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'Content-Type: application/octet-stream' \
+              --data-binary "@$asset" \
+              "$upload_url?name=$(basename "$asset")"
+          done
