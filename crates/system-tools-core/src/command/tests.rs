@@ -6,6 +6,7 @@ use crate::{CommandPlan, CommandPrivilege};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -20,6 +21,14 @@ fn write_executable(path: &std::path::Path, contents: &str) {
     permissions.set_mode(0o755);
     fs::set_permissions(&temporary, permissions).expect("make command fixture executable");
     fs::rename(temporary, path).expect("publish command fixture");
+}
+
+fn unique_fixture(prefix: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()))
 }
 
 #[test]
@@ -195,10 +204,7 @@ fn privilege_runner_uses_trusted_sudo_and_fixed_path() {
 #[test]
 fn privilege_runner_propagates_sudo_failure() {
     // Given a trusted fake sudo that exits unsuccessfully
-    let fixture = std::env::temp_dir().join(format!(
-        "system-tools-core-privilege-failure-{}",
-        std::process::id()
-    ));
+    let fixture = unique_fixture("system-tools-core-privilege-failure");
     let _ = fs::remove_dir_all(&fixture);
     fs::create_dir_all(&fixture).expect("create failure fixture");
     write_executable(&fixture.join("sudo"), "#!/bin/sh\nexit 23\n");
@@ -214,10 +220,7 @@ fn privilege_runner_propagates_sudo_failure() {
 
 #[test]
 fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
-    let fixture = std::env::temp_dir().join(format!(
-        "system-tools-core-command-plan-runner-{}",
-        std::process::id()
-    ));
+    let fixture = unique_fixture("system-tools-core-command-plan-runner");
     let _ = fs::remove_dir_all(&fixture);
     fs::create_dir_all(&fixture).expect("create command plan fixture");
     let user_log = fixture.join("user.log");
@@ -274,10 +277,7 @@ fn command_plan_runner_preserves_absolute_argv_and_environment_policy() {
 #[test]
 fn captured_elevated_plan_uses_sudo_and_keeps_environment_argv_and_failure_output() {
     // Given a fake sudo that records its environment and structured arguments.
-    let fixture = std::env::temp_dir().join(format!(
-        "system-tools-core-capture-plan-{}",
-        std::process::id()
-    ));
+    let fixture = unique_fixture("system-tools-core-capture-plan");
     fs::create_dir_all(&fixture).expect("create capture fixture");
     write_executable(
         &fixture.join("sudo"),
@@ -325,8 +325,7 @@ fn captured_elevated_plan_does_not_fall_back_when_privilege_runner_is_unavailabl
 
 #[test]
 fn keyring_plan_uses_absolute_pacman_locale_scrubbing_and_trusted_sudo() {
-    let fixture =
-        std::env::temp_dir().join(format!("system-tools-core-keyring-{}", std::process::id()));
+    let fixture = unique_fixture("system-tools-core-keyring");
     let _ = fs::remove_dir_all(&fixture);
     let bin = fixture.join("bin");
     fs::create_dir_all(&bin).expect("create fixture bin");
