@@ -139,11 +139,17 @@ fn timing_event(phase: &str, started: Instant) {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn query_reload_bind(executable: &std::path::Path, refresh: bool) -> String {
-    let executable = shell_quote(executable.to_string_lossy().as_ref());
-    let refresh = if refresh { " --refresh" } else { "" };
     format!(
-        "change:reload(sh -c 'set -eu; state=${{PACKTIDE_QUERY_STATE:?}}; lock=\"$state.lock\"; while ! mkdir \"$lock\" 2>/dev/null; do sleep 0.01; done; generation=$(cat \"$state\" 2>/dev/null || printf 0); generation=$((generation + 1)); printf \"%s\\n\" \"$generation\" >\"$state\"; rmdir \"$lock\"; sleep 0.3; current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" != \"$generation\" ]; then exit 0; fi; q=$(printf \"%s\" \"$1\" | sed -e \"s/^[[:space:]]*//\" -e \"s/[[:space:]]*$//\"); output=$(mktemp \"${{TMPDIR:-/tmp}}/packtide-query.XXXXXX\"); child=; cleanup() {{ status=$?; trap - TERM INT HUP EXIT; if [ -n \"$child\" ]; then kill -- -\"$child\" 2>/dev/null || kill \"$child\" 2>/dev/null || true; wait \"$child\" 2>/dev/null || true; fi; rm -f \"$output\"; exit $status; }}; trap cleanup TERM INT HUP EXIT; if [ ${{#q}} -lt 2 ]; then setsid env PACKTIDE_INSTALL_LIST_ONLY=1 \"$0\" install{refresh} >\"$output\" & else setsid env PACKTIDE_INSTALL_LIST_ONLY=1 \"$0\" install{refresh} \"$q\" >\"$output\" & fi; child=$!; while kill -0 \"$child\" 2>/dev/null; do current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" != \"$generation\" ]; then kill -- -\"$child\" 2>/dev/null || kill \"$child\" 2>/dev/null || true; break; fi; sleep 0.05; done; wait \"$child\" 2>/dev/null || true; current=$(cat \"$state\" 2>/dev/null || printf 0); if [ \"$current\" = \"$generation\" ]; then cat \"$output\"; fi; rm -f \"$output\"; trap - TERM INT HUP EXIT' {executable} {{q}})"
+        "change:reload({})",
+        query_reload_command(executable, refresh)
     )
+}
+
+fn query_reload_command(executable: &std::path::Path, refresh: bool) -> String {
+    let executable = shell_quote(executable.to_string_lossy().as_ref());
+    let script = shell_quote(include_str!("query_reload.sh"));
+    let refresh = if refresh { "refresh" } else { "cached" };
+    format!("bash -c {script} {executable} {{q}} {refresh}")
 }
 
 fn push_wrapped_item(output: &mut String, line_width: &mut usize, item: &str, columns: usize) {
@@ -211,15 +217,16 @@ fn select_rows_with_input(
     let executable = current_executable()?;
     let mode = if removing { "remove" } else { "install" };
     let lang = crate::locale::current();
-    let reload_command = format!(
-        "PACKTIDE_{}_LIST_ONLY=1 {} {}{}",
-        if removing { "REMOVE" } else { "INSTALL" },
-        shell_quote(executable.to_string_lossy().as_ref()),
-        mode,
-        if removing { "" } else { " --refresh" }
-    );
+    let reload_command = if removing {
+        format!(
+            "PACKTIDE_REMOVE_LIST_ONLY=1 {} remove",
+            shell_quote(executable.to_string_lossy().as_ref()),
+        )
+    } else {
+        query_reload_command(&executable, true)
+    };
     let reload = format!(
-        "ctrl-r:change-prompt({})+reload-sync({reload_command})",
+        "ctrl-r:change-prompt({})+reload({reload_command})",
         crate::locale::text(
             lang,
             if removing {
@@ -414,6 +421,10 @@ fn select_rows_with_input(
 }
 
 #[cfg(test)]
+#[path = "fzf_query_tests.rs"]
+mod query_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{classify_fzf_status, picker_header, query_reload_bind, wrap_shortcut_line};
     use std::os::unix::process::ExitStatusExt;
@@ -469,15 +480,15 @@ mod tests {
     #[test]
     fn query_reload_binding_trims_debounces_and_restores_initial_rows() {
         let bind = query_reload_bind(std::path::Path::new("/tmp/packtide"), true);
-        assert!(bind.starts_with("change:reload(sh -c 'set -eu;"));
+        assert!(bind.starts_with("change:reload(bash -c 'set -eu"));
         assert!(bind.contains("sleep 0.3"));
-        assert!(bind.contains("sed -e \"s/^[[:space:]]*//\""));
-        assert!(bind.contains("-e \"s/[[:space:]]*$//\""));
-        assert!(bind.contains("${#q} -lt 2"));
+        assert!(bind.contains("s/^[[:space:]]*//"));
+        assert!(bind.contains("s/[[:space:]]*$//"));
+        assert!(bind.contains("${#q}\" -ge 2"));
         assert!(bind.contains("PACKTIDE_INSTALL_LIST_ONLY=1"));
         assert!(bind.contains("PACKTIDE_QUERY_STATE"));
         assert!(bind.contains("setsid"));
-        assert!(bind.contains("kill -- -\"$child\""));
+        assert!(bind.contains("kill -TERM -- \"-$child\""));
         assert!(bind.contains("while kill -0 \"$child\""));
         assert!(bind.contains("[ \"$current\" != \"$generation\" ]"));
         assert!(bind.contains("current=$(cat \"$state\""));
