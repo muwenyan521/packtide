@@ -57,7 +57,7 @@ an unrelated Arch-specific command.
 
 ## Picker UI contract
 
-The picker keeps the source label and color in one metadata layer. Rows have stable tab-separated
+The picker keeps the source label and color in one metadata layer. Rows use stable tab-separated
 columns for source, package name, version/details, and the optional installed marker. The hidden
 row token carries `BackendId`, `PackageScope`, package kind, native key, and provider metadata;
 selection and preview must restore that typed identity rather than infer it from the visible label.
