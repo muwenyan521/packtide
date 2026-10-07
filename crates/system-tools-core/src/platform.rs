@@ -1,5 +1,10 @@
 //! Host distribution detection and native package-manager selection.
-use std::{collections::BTreeMap, ffi::OsStr, fmt, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBackend {
@@ -227,6 +232,12 @@ pub fn detect_native_backend_from_path(
 pub fn detect_native_backend_from_file(
     path: impl AsRef<Path>,
 ) -> Result<NativeBackend, PlatformError> {
+    #[cfg(debug_assertions)]
+    let path = std::env::var_os("PACKTIDE_OS_RELEASE_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.as_ref().to_owned());
+    #[cfg(not(debug_assertions))]
+    let path = path.as_ref().to_owned();
     let input = fs::read_to_string(path).map_err(|_| PlatformError::UnsupportedDistribution)?;
     detect_native_backend_from_path(&input, std::env::var_os("PATH").as_deref())
 }
