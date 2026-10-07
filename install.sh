@@ -18,7 +18,8 @@ msg() {
             deps) say "正在补全运行依赖：$*" ;;
             replace) say "检测到已有命令：$2。是否备份并替换？[y/N]" ;;
             install_done) say "安装完成：$2" ;;
-            shell_path) say "请重新打开 fish，或在当前 fish 中执行：fish_add_path -g -m $2" ;;
+            shell_path) say "请重新打开当前 shell，或执行：export PATH=\"$2:\$PATH\"" ;;
+            fish_path) say "请重新打开 fish，或在当前 fish 中执行：fish_add_path -g -m $2" ;;
             skip) say "保留已有命令：$2" ;;
             unsupported) say "无法自动安装依赖，请先安装 fzf 和权限工具后重试。" ;;
             *) say "$*" ;;
@@ -33,7 +34,8 @@ msg() {
             deps) say "Installing runtime dependencies: $*" ;;
             replace) say "Existing command found: $2. Back up and replace it? [y/N]" ;;
             install_done) say "Installed: $2" ;;
-            shell_path) say "Open a new fish shell, or run this in the current fish session: fish_add_path -g -m $2" ;;
+            shell_path) say "Open a new shell, or run this in the current shell: export PATH=\"$2:\$PATH\"" ;;
+            fish_path) say "Open a new fish shell, or run this in the current fish session: fish_add_path -g -m $2" ;;
             skip) say "Keeping existing command: $2" ;;
             unsupported) say "Install fzf and a privilege helper, then run this script again." ;;
             *) say "$*" ;;
@@ -227,8 +229,8 @@ for command in pac pacr pacrrr sysup; do
     fi
 done
 
-ln -sfn "$prefix/packtide" "$bindir/packtide"
-ln -sfn "$prefix/systide" "$bindir/systide"
+install -m 0755 "$prefix/packtide" "$bindir/packtide"
+install -m 0755 "$prefix/systide" "$bindir/systide"
 ln -sfn "$prefix/packtide" "$bindir/ptd"
 ln -sfn "$prefix/systide" "$bindir/suu"
 for command in packtide ptd systide suu; do
@@ -248,4 +250,7 @@ fish_profile=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/packtide.fish
 mkdir -p "$(dirname "$fish_profile")"
 printf '%s\n' "fish_add_path -g -m '$bindir'" > "$fish_profile"
 msg install_done "$prefix (packtide/ptd and systide/suu)"
-case "${SHELL##*/}" in fish) msg shell_path "$bindir" ;; esac
+case "${SHELL##*/}" in
+    fish) msg fish_path "$bindir" ;;
+    bash|zsh|ksh) msg shell_path "$bindir" ;;
+esac
