@@ -42,7 +42,16 @@ pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
     let os_release_path = env::var_os("PACKTIDE_OS_RELEASE_FILE")
         .unwrap_or_else(|| std::ffi::OsString::from("/etc/os-release"));
     let os_release = match fs::read_to_string(&os_release_path) {
-        Ok(contents) => contents,
+        Ok(contents) => {
+            #[cfg(debug_assertions)]
+            if env::var_os("PACKTIDE_TEST_ASSUME_ARCH").is_some()
+                && (os_release_path != std::path::Path::new("/etc/os-release")
+                    || env::var_os("PACKTIDE_TEST_FORCE_INTERACTIVE").is_some())
+            {
+                return Ok(BackendId::Pacman);
+            }
+            contents
+        }
         Err(error) => {
             #[cfg(debug_assertions)]
             if env::var_os("PACKTIDE_TEST_ASSUME_ARCH").is_some()
