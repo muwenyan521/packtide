@@ -1788,7 +1788,14 @@ fn read_xbps(
         ),
     };
     let output = execute_plan(&plan, backend, "read packages")?;
-    if !output.status.success() {
+    let warning_only_details = details
+        && !output.stdout.trim().is_empty()
+        && output
+            .stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| line.trim_start().starts_with("WARNING:"));
+    if !output.status.success() && !warning_only_details {
         return Err(command_failed(backend, "read packages", &output));
     }
     if let ReadOperation::Details { package, scope } = &operation {

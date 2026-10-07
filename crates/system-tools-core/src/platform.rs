@@ -1,10 +1,7 @@
 //! Host distribution detection and native package-manager selection.
-use std::{
-    collections::BTreeMap,
-    ffi::OsStr,
-    fmt, fs,
-    path::{Path, PathBuf},
-};
+#[cfg(debug_assertions)]
+use std::path::PathBuf;
+use std::{collections::BTreeMap, ffi::OsStr, fmt, fs, path::Path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBackend {

@@ -142,7 +142,11 @@ pub fn parse_installed(input: &str) -> Result<Vec<XbpsPackage>, XbpsError> {
     input
         .lines()
         .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .filter(|(_, l)| {
+            !l.trim().is_empty()
+                && !l.trim_start().starts_with('#')
+                && !l.trim_start().starts_with("WARNING:")
+        })
         .map(|(i, l)| parse_record(i + 1, l, true))
         .collect()
 }
@@ -384,5 +388,15 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "tzdata");
         assert_eq!(packages[0].version, "2026e");
+    }
+
+    #[test]
+    fn installed_ignores_provider_warnings_before_records() {
+        let packages = parse_installed(
+            "WARNING: tzdata-2025a_1: invalid provides: py3:tzdata-2025a\ntzdata-2025a_1\trepo\tx86_64\n",
+        )
+        .expect("parse installed output with an XBPS warning");
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "tzdata");
     }
 }
