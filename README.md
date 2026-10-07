@@ -73,6 +73,9 @@ against the local executable namespace and crates.io on 2026-10-07: neither name
 provided by this project or registered as a crate. Full names remain available.
 
 Set `PACKTIDE_UI_LANG=zh` for Chinese installer prompts, or `PACKTIDE_UI_LANG=en` for English.
+The installer reads replacement answers from the terminal even when launched through
+`curl | sh`. For fish, it writes `~/.config/fish/conf.d/packtide.fish`; open a new fish
+shell, or run the `fish_add_path` command printed by the installer in the current shell.
 
 ### Release archive
 

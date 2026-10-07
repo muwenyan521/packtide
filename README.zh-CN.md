@@ -69,6 +69,9 @@ curl -fsSL https://raw.githubusercontent.com/muwenyan521/packtide/master/install
 命令空间和 crates.io 名称检查，项目自身没有重复注册；完整命令仍然保留。
 
 设置 `PACKTIDE_UI_LANG=zh` 使用中文安装提示，设置 `PACKTIDE_UI_LANG=en` 使用英文提示。
+即使通过 `curl | sh` 启动，安装脚本也会从终端读取替换确认。使用 fish 时，脚本会写入
+`~/.config/fish/conf.d/packtide.fish`；请重新打开 fish，或在当前 shell 中执行安装脚本
+打印的 `fish_add_path` 命令。
 
 ### 发布归档
 

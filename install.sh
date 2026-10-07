@@ -18,6 +18,7 @@ msg() {
             deps) say "正在补全运行依赖：$*" ;;
             replace) say "检测到已有命令：$2。是否备份并替换？[y/N]" ;;
             install_done) say "安装完成：$2" ;;
+            shell_path) say "请重新打开 fish，或在当前 fish 中执行：fish_add_path -g -m $2" ;;
             skip) say "保留已有命令：$2" ;;
             unsupported) say "无法自动安装依赖，请先安装 fzf 和权限工具后重试。" ;;
             *) say "$*" ;;
@@ -32,6 +33,7 @@ msg() {
             deps) say "Installing runtime dependencies: $*" ;;
             replace) say "Existing command found: $2. Back up and replace it? [y/N]" ;;
             install_done) say "Installed: $2" ;;
+            shell_path) say "Open a new fish shell, or run this in the current fish session: fish_add_path -g -m $2" ;;
             skip) say "Keeping existing command: $2" ;;
             unsupported) say "Install fzf and a privilege helper, then run this script again." ;;
             *) say "$*" ;;
@@ -56,6 +58,12 @@ run_privileged() {
         "$as_root" "$@"
     else
         "$@"
+    fi
+}
+read_answer() {
+    answer=
+    if [ -r /dev/tty ]; then
+        IFS= read -r answer </dev/tty || answer=
     fi
 }
 if ! need_cmd curl || ! need_cmd install; then
@@ -199,7 +207,7 @@ install -m 0755 "$payload/systide" "$prefix/systide"
 for command in pac pacr pacrrr sysup; do
     if path=$(command -v "$command" 2>/dev/null); then
         msg replace "$command"
-        if [ "$lang" = zh ]; then read -r answer || answer=; else read -r answer || answer=; fi
+        read_answer
         case "$answer" in y|Y|yes|YES|是)
             backup="$path.packtide-backup.$(date +%Y%m%d%H%M%S)"
             if [ -w "$path" ] || [ -w "$(dirname "$path")" ]; then
@@ -223,6 +231,12 @@ ln -sfn "$prefix/packtide" "$bindir/packtide"
 ln -sfn "$prefix/systide" "$bindir/systide"
 ln -sfn "$prefix/packtide" "$bindir/ptd"
 ln -sfn "$prefix/systide" "$bindir/suu"
+for command in packtide ptd systide suu; do
+    if [ ! -x "$bindir/$command" ]; then
+        say "Failed to create command link: $bindir/$command" >&2
+        exit 1
+    fi
+done
 profile=${XDG_CONFIG_HOME:-$HOME/.config}/packtide/profile
 mkdir -p "$(dirname "$profile")"
 printf '%s\n' "export PATH=\"$bindir:\$PATH\"" > "$profile"
@@ -230,4 +244,8 @@ for shell_profile in "$HOME/.profile" "$HOME/.bashrc"; do
     touch "$shell_profile"
     grep -Fqx ". \"$profile\"" "$shell_profile" 2>/dev/null || printf '%s\n' ". \"$profile\"" >> "$shell_profile"
 done
+fish_profile=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/packtide.fish
+mkdir -p "$(dirname "$fish_profile")"
+printf '%s\n' "fish_add_path -g -m '$bindir'" > "$fish_profile"
 msg install_done "$prefix (packtide/ptd and systide/suu)"
+case "${SHELL##*/}" in fish) msg shell_path "$bindir" ;; esac
