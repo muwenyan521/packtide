@@ -10,7 +10,14 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MPL-2.0"
-version = "0.1.0"
+version = "0.1.1"
+authors = ["wangxianming"]
+description = "Cross-distribution package and system maintenance tools"
+repository = "https://github.com/muwenyan521/packtide"
+homepage = "https://github.com/muwenyan521/packtide"
+readme = "README.md"
+keywords = ["linux", "package-manager", "tui", "system-update"]
+categories = ["command-line-utilities", "os::linux-apis"]
 rust-version = "1.88"
 
 [profile.release]

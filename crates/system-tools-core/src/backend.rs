@@ -1333,23 +1333,13 @@ fn read_dnf_with_resolver(
             }),
         ));
     }
-    let parsed = if generation == DnfGeneration::Dnf5 {
-        crate::backends::dnf::parse_dnf5_json(&out.stdout).map_err(|e| {
-            BackendError::CommandFailed {
-                backend,
-                operation: "parse DNF catalog",
-                message: e.to_string(),
-            }
-        })?
-    } else {
-        crate::backends::dnf::parse_dnf4_table(&out.stdout).map_err(|e| {
-            BackendError::CommandFailed {
-                backend,
-                operation: "parse DNF catalog",
-                message: e.to_string(),
-            }
-        })?
-    };
+    let parsed = crate::backends::dnf::parse_dnf4_table(&out.stdout).map_err(|e| {
+        BackendError::CommandFailed {
+            backend,
+            operation: "parse DNF catalog",
+            message: e.to_string(),
+        }
+    })?;
     let mut packages: Vec<_> = parsed
         .into_iter()
         .filter(|p| !parser || p.installed)
@@ -1728,6 +1718,23 @@ fn read_apk(
     if !output.status.success() {
         return Err(command_failed(backend, "read packages", &output));
     }
+    if let ReadOperation::Details { package, scope } = &operation {
+        return Ok((
+            vec![identity_for(
+                backend,
+                PackageKind::System,
+                *scope,
+                package.as_str().to_owned(),
+            )?],
+            CatalogStrategy::Enumerated,
+            Some(ReadDetails {
+                stdout: output.stdout,
+                stderr: output.stderr,
+                status: output.status,
+                success: true,
+            }),
+        ));
+    }
     let packages = match operation {
         ReadOperation::Installed => crate::backends::apk::parse_installed(&output.stdout),
         _ => crate::backends::apk::parse_search(&output.stdout),
@@ -1784,25 +1791,52 @@ fn read_xbps(
     if !output.status.success() {
         return Err(command_failed(backend, "read packages", &output));
     }
-    let packages = match operation {
-        ReadOperation::Installed => crate::backends::xbps::parse_installed(&output.stdout),
-        _ => crate::backends::xbps::parse_search(&output.stdout),
+    if let ReadOperation::Details { package, scope } = &operation {
+        return Ok((
+            vec![identity_for(
+                backend,
+                PackageKind::System,
+                *scope,
+                package.as_str().to_owned(),
+            )?],
+            CatalogStrategy::Enumerated,
+            Some(ReadDetails {
+                stdout: output.stdout,
+                stderr: output.stderr,
+                status: output.status,
+                success: true,
+            }),
+        ));
     }
-    .map_err(|e| optional_read_error(backend, e))?
-    .into_iter()
-    .filter_map(|p| {
-        let display = format!("{} {}", p.name, p.version);
-        identity_for(backend, PackageKind::System, PackageScope::System, p.name)
-            .ok()
-            .map(|identity| {
-                if matches!(operation, ReadOperation::Updates) {
-                    identity.with_display_name(display)
-                } else {
-                    identity
-                }
+    let packages = if matches!(operation, ReadOperation::Updates) {
+        crate::backends::xbps::parse_updates(&output.stdout)
+            .map_err(|e| optional_read_error(backend, e))?
+            .into_iter()
+            .filter_map(|p| {
+                let display = format!(
+                    "{} {} -> {}",
+                    p.name,
+                    p.current.as_deref().unwrap_or("?"),
+                    p.candidate
+                );
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name)
+                    .ok()
+                    .map(|identity| identity.with_display_name(display))
             })
-    })
-    .collect();
+            .collect()
+    } else {
+        let parsed = match operation {
+            ReadOperation::Installed => crate::backends::xbps::parse_installed(&output.stdout),
+            _ => crate::backends::xbps::parse_search(&output.stdout),
+        }
+        .map_err(|e| optional_read_error(backend, e))?;
+        parsed
+            .into_iter()
+            .filter_map(|p| {
+                identity_for(backend, PackageKind::System, PackageScope::System, p.name).ok()
+            })
+            .collect()
+    };
     let detail = details.then_some(ReadDetails {
         stdout: output.stdout,
         stderr: output.stderr,
@@ -1830,11 +1864,7 @@ fn read_flatpak(
                 let output = run_backend_command(
                     backend,
                     "list Flatpak applications",
-                    &[
-                        "list",
-                        "--app",
-                        "--columns=application,origin,name,installation",
-                    ],
+                    &["list", "--app", "--columns=application,origin,name"],
                 )?;
                 if !output.status.success() {
                     return Err(command_failed(
@@ -1935,7 +1965,7 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
             "remote-ls",
             "--app",
             "--cached",
-            "--columns=application,origin,name,installation",
+            "--columns=application,origin,name",
         ],
     );
     let cached_text = cached
@@ -1948,11 +1978,7 @@ fn flatpak_catalog_output(backend: BackendId, refresh: bool) -> Result<String, B
         let live = run_backend_command(
             backend,
             "enumerate Flatpak applications",
-            &[
-                "remote-ls",
-                "--app",
-                "--columns=application,origin,name,installation",
-            ],
+            &["remote-ls", "--app", "--columns=application,origin,name"],
         )?;
         if !live.status.success() {
             return Err(command_failed(
@@ -2697,7 +2723,7 @@ mod tests {
             )
             .expect("resolve xbps-install without a synthetic xbps command");
         assert_eq!(install.program, directory.join("xbps-install"));
-        assert_eq!(install.args, ["-y", "hello"]);
+        assert_eq!(install.args, ["hello"]);
 
         let remove = backend
             .command_for_with_resolver(
@@ -2730,7 +2756,7 @@ mod tests {
             ),
             (
                 "dnf5",
-                "#!/bin/sh\nprintf '%s\\n' '[{\"name\":\"modern-bash\",\"version\":\"5.2\",\"arch\":\"x86_64\",\"installed\":true}]'\n",
+                "#!/bin/sh\nprintf 'modern-bash\\t0\\t5.2\\t1\\tx86_64\\tfedora\\t1\\n'\n",
             ),
         ];
         for (executable, body) in fixtures {
@@ -2780,7 +2806,6 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create DNF status fixture");
         let fixture = r#"#!/bin/sh
 case "$1:$2" in
-    list:--upgrades) printf '%s\n' '[{"name":"bash","version":"5.3"}]'; exit 100 ;;
     repoquery:--upgrades) printf 'bash\t0\t5.3\t1\tx86_64\tfedora\t0\n'; exit 100 ;;
 esac
 printf '%s\n' 'dnf read failed' >&2

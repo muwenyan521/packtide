@@ -300,6 +300,15 @@ pub(crate) fn install_catalog_for_backends(
             ));
         }
     }
+    let mut seen = HashSet::new();
+    records.retain(|record| {
+        seen.insert((
+            record.backend,
+            record.kind,
+            record.scope,
+            record.native_key.clone(),
+        ))
+    });
     if !diagnostics.is_empty() {
         eprintln!(
             "optional package providers unavailable: {}",

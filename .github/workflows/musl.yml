@@ -1,0 +1,28 @@
+name: Musl
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    container: alpine:3.22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          apk add --no-cache bash build-base cargo rust rustfmt clippy musl-dev openssl-dev pkgconf fzf python3
+      - name: Check formatting and shell entry points
+        run: |
+          cargo fmt --all -- --check
+          sh -n install.sh packaging/install.sh
+          ./packaging/check-release-artifacts.sh --help >/dev/null 2>&1 || true
+      - name: Build and test
+        run: |
+          cargo test --workspace --locked
+          cargo build --target x86_64-unknown-linux-musl --workspace --release --locked

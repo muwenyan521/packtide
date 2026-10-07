@@ -5,11 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Cross-distribution system update orchestrator"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["linux", "system-update", "package-manager"]
+categories = ["command-line-utilities", "os::linux-apis"]
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 quick-xml = "0.41.0"
 unicode-width = "0.2"
-system-tools-core = { path = "../system-tools-core", version = "0.1.0" }
+system-tools-core = { path = "../system-tools-core", version = "0.1.1" }
 ureq = { version = "3", default-features = false, features = ["rustls"] }

@@ -4,6 +4,10 @@ English | [简体中文](README.zh-CN.md)
 
 The release contains `packtide` and `systide`. Supported installation paths:
 
+The non-Arch bootstrap path is the repository-root `install.sh`; it selects the GNU or musl
+archive, installs missing `fzf`/privilege dependencies where supported, and asks before
+replacing older `pac`/`sysup`-style commands. It also installs the short aliases `ptd` and `suu`.
+
 * Download the published Linux tarball, put both binaries on `PATH`, and install `man/` and `completions/` into the matching system directories.
 * Arch Linux: from a checkout, run `makepkg -si` in `packaging/packtide/`. The recipe is
   checkout-local for now; an official package submission should switch it to a tagged source archive.

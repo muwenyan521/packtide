@@ -88,7 +88,7 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
                     cur = Some(Record {
                         kind: attr(&e, "type").or_else(|| attr(&e, "kind")),
                         name: attr(&e, "name"),
-                        version: attr(&e, "version"),
+                        version: attr(&e, "version").or_else(|| attr(&e, "edition")),
                         arch: attr(&e, "arch"),
                         repo: attr(&e, "repo").or_else(|| attr(&e, "repository")),
                         installed: attr(&e, "status")
@@ -106,7 +106,7 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
                     out.push(Record {
                         kind: attr(&e, "type").or_else(|| attr(&e, "kind")),
                         name: attr(&e, "name"),
-                        version: attr(&e, "version"),
+                        version: attr(&e, "version").or_else(|| attr(&e, "edition")),
                         arch: attr(&e, "arch"),
                         repo: attr(&e, "repo").or_else(|| attr(&e, "repository")),
                         installed: attr(&e, "status")
@@ -167,7 +167,7 @@ fn records(input: &str) -> Result<Vec<Record>, ZypperError> {
 fn append_field(record: &mut Record, field: &str, value: &str) {
     match field {
         "name" => record.name.get_or_insert_with(String::new).push_str(value),
-        "version" | "evr" => record
+        "version" | "edition" | "evr" => record
             .version
             .get_or_insert_with(String::new)
             .push_str(value),
@@ -290,7 +290,7 @@ impl ZypperBackend {
         if p.as_str().trim().is_empty() {
             Err(ZypperError::InvalidPackageId)
         } else {
-            Ok(self.plan(["--xmlout", "info", p.as_str()], CommandPrivilege::User))
+            Ok(self.plan(["info", p.as_str()], CommandPrivilege::User))
         }
     }
     pub fn updates_plan(&self) -> CommandPlan {
@@ -386,7 +386,7 @@ mod tests {
                 .details_plan(&PackageId::new("bash").unwrap())
                 .unwrap()
                 .args,
-            ["--xmlout", "info", "bash"]
+            ["info", "bash"]
         );
         assert_eq!(backend.updates_plan().args, ["--xmlout", "list-updates"]);
         assert_eq!(backend.refresh_plan().args, ["refresh"]);

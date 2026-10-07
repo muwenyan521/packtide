@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Typed package-manager backends, command plans, and privilege boundaries"
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["linux", "package-manager", "backend"]
+categories = ["command-line-utilities", "os::linux-apis"]
 
 [dependencies]
 anyhow = "1"

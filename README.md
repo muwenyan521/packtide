@@ -58,6 +58,22 @@ the machine. It prints each step and keeps provider errors in the output.
 
 ## Install
 
+### Non-Arch one-command install
+
+The installer detects the distribution, glibc/musl runtime, architecture, privilege helper,
+and install prefix. It installs the GNU or static musl release, adds the selected bin directory
+to `PATH`, and asks before replacing commands from older package-manager helpers.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/muwenyan521/packtide/master/install.sh | sh
+```
+
+The official short commands are `ptd` for `packtide` and `suu` for `systide`. They were checked
+against the local executable namespace and crates.io on 2026-10-07: neither name is already
+provided by this project or registered as a crate. Full names remain available.
+
+Set `PACKTIDE_UI_LANG=zh` for Chinese installer prompts, or `PACKTIDE_UI_LANG=en` for English.
+
 ### Release archive
 
 Download the [`x86_64-unknown-linux-gnu` release archive](https://github.com/muwenyan521/packtide/releases),

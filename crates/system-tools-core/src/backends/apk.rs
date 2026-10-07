@@ -65,13 +65,30 @@ fn parse_version(raw: &str) -> (Option<String>, String, Option<String>) {
 
 fn parse_line(line_no: usize, line: &str, installed: bool) -> Result<ApkPackage, ApkError> {
     let fields: Vec<_> = line.split('\t').collect();
-    if fields.len() < 2 || fields[0].trim().is_empty() || fields[1].trim().is_empty() {
+    let compact = fields.len() < 2;
+    let (name, raw_version) = if compact {
+        split_compact_package(fields.first().copied().unwrap_or_default()).ok_or(
+            ApkError::MalformedRecord {
+                line: line_no,
+                reason: "expected name and version",
+            },
+        )?
+    } else {
+        (fields[0].trim(), fields[1].trim())
+    };
+    if name.is_empty() || raw_version.is_empty() {
         return Err(ApkError::MalformedRecord {
             line: line_no,
             reason: "expected name and version",
         });
     }
-    let (epoch, version, revision) = parse_version(fields[1].trim());
+    let (epoch, version, revision) = parse_version(raw_version);
+    if version.trim().is_empty() || epoch.as_deref().is_some_and(str::is_empty) {
+        return Err(ApkError::MalformedRecord {
+            line: line_no,
+            reason: "version is empty",
+        });
+    }
     let tags = fields
         .get(4)
         .map(|v| {
@@ -85,7 +102,7 @@ fn parse_line(line_no: usize, line: &str, installed: bool) -> Result<ApkPackage,
         *v == "1" || v.eq_ignore_ascii_case("world") || v.split(',').any(|tag| tag == "world")
     });
     Ok(ApkPackage {
-        name: fields[0].to_owned(),
+        name: name.to_owned(),
         epoch,
         version,
         revision,
@@ -100,6 +117,14 @@ fn parse_line(line_no: usize, line: &str, installed: bool) -> Result<ApkPackage,
         tags,
         world,
         installed,
+    })
+}
+
+fn split_compact_package(value: &str) -> Option<(&str, &str)> {
+    let value = value.trim();
+    value.char_indices().rev().find_map(|(index, ch)| {
+        (ch == '-' && value.get(index + 1..)?.chars().next()?.is_ascii_digit())
+            .then(|| (&value[..index], &value[index + 1..]))
     })
 }
 
@@ -187,7 +212,7 @@ impl ApkBackend {
         Ok(self.read(["info", package.as_str()]))
     }
     pub fn updates_plan(&self) -> CommandPlan {
-        self.read(["version", "--available"])
+        self.read(["list", "--upgradable"])
     }
     pub fn update_catalog_plan(&self) -> CommandPlan {
         self.elevated(["update"])

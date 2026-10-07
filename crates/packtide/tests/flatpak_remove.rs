@@ -388,8 +388,7 @@ fn install_selection_preserves_repository_and_aur_transaction_arguments() {
         ),
     );
     fixture.write_executable("fzf", "#!/bin/sh\n/usr/bin/awk '/bash/ || /aur-tool/'\n");
-    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
-        .expect("build isolated PATH");
+    let path = fixture.path().to_path_buf().into_os_string();
 
     let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
         .args(["install"])
@@ -732,8 +731,7 @@ fn empty_install_catalog_is_distinct_from_fzf_cancellation() {
             fzf_called.display()
         ),
     );
-    let path = std::env::join_paths([fixture.path(), Path::new("/usr/bin"), Path::new("/bin")])
-        .expect("build isolated PATH");
+    let path = fixture.path().to_path_buf().into_os_string();
 
     let output = Command::new(env!("CARGO_BIN_EXE_packtide"))
         .args(["install"])

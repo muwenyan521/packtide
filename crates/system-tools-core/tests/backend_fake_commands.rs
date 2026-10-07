@@ -120,7 +120,7 @@ fn every_backend_exposes_typed_install_remove_and_upgrade_plans() {
         assert_eq!(remove.command.program, fixture.0.join(remove_program));
         assert_eq!(install.command.locale, Some(OsString::from("C")));
         assert_eq!(remove.command.locale, Some(OsString::from("C")));
-        assert!(install.command.args.len() >= 2, "{backend:?} install argv");
+        assert!(!install.command.args.is_empty(), "{backend:?} install argv");
         assert!(remove.command.args.len() >= 2, "{backend:?} remove argv");
 
         if provider

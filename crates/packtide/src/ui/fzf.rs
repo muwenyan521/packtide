@@ -146,7 +146,7 @@ fn query_reload_command(executable: &std::path::Path, refresh: bool) -> String {
     let executable = shell_quote(executable.to_string_lossy().as_ref());
     let script = shell_quote(include_str!("query_reload.sh"));
     let refresh = if refresh { "refresh" } else { "cached" };
-    format!("exec bash -c {script} {executable} {{q}} {refresh}")
+    format!("exec sh -c {script} {executable} {{q}} {refresh}")
 }
 
 fn push_wrapped_item(output: &mut String, line_width: &mut usize, item: &str, columns: usize) {
@@ -342,7 +342,7 @@ fn select_rows_with_input(
         args.extend(["--bind", "alt-c:accept"]);
     }
     let preview = format!(
-        "bash -c 'exec {} __preview {mode} \"$1\"' packtide-preview \"{{}}\"",
+        "sh -c 'exec {} __preview {mode} \"$1\"' packtide-preview \"{{}}\"",
         shell_quote(executable.to_string_lossy().as_ref()),
     );
     args.extend(["--preview", preview.as_str()]);
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn query_reload_binding_trims_debounces_and_restores_initial_rows() {
         let bind = query_reload_bind(std::path::Path::new("/tmp/packtide"), true);
-        assert!(bind.starts_with("zero:reload(exec bash -c 'set -eu"));
+        assert!(bind.starts_with("zero:reload(exec sh -c 'set -eu"));
         assert!(bind.contains("sleep 0.3"));
         assert!(bind.contains("s/^[[:space:]]*//"));
         assert!(bind.contains("s/[[:space:]]*$//"));

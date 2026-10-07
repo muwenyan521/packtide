@@ -28,7 +28,7 @@ impl Fixture {
         let body = r#"
 case "$0" in
   *apt-cache) cat "$FIXTURE_ROOT/apt/catalog.deb822" ;;
-  *dnf5) printf '%s\n' '[{"name":"bash","version":"5.2","arch":"x86_64"}]' ;;
+  *dnf5) printf 'bash\t0\t5.2\t1\tx86_64\tfedora\t0\n' ;;
   *zypper) cat "$FIXTURE_ROOT/zypper/search.xml" ;;
   *apk) cat "$FIXTURE_ROOT/apk/search.tsv" ;;
   *xbps-query) cat "$FIXTURE_ROOT/xbps/search.tsv" ;;

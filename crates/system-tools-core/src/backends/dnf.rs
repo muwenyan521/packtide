@@ -46,7 +46,7 @@ impl fmt::Display for DnfError {
                 write!(f, "DNF5 record {record} is missing {field}")
             }
             Self::MalformedTable { line, reason } => {
-                write!(f, "invalid DNF4 queryformat line {line}: {reason}")
+                write!(f, "invalid DNF queryformat line {line}: {reason}")
             }
             Self::InvalidPackageId => f.write_str("package id must not be empty"),
             Self::UnsupportedOperation => f.write_str("DNF does not support this operation"),
@@ -188,45 +188,33 @@ impl DnfBackend {
         self.read(a).with_privilege(CommandPrivilege::Elevated)
     }
     pub fn list_plan(&self) -> CommandPlan {
-        match self.generation {
-            DnfGeneration::Dnf5 => self.read(["list", "--json"]),
-            DnfGeneration::Dnf4 => self.read([
-                "repoquery",
-                "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
-            ]),
-        }
+        self.read([
+            "repoquery",
+            "--qf",
+            "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
+        ])
     }
     pub fn installed_plan(&self) -> CommandPlan {
-        match self.generation {
-            DnfGeneration::Dnf5 => self.read(["list", "--installed", "--json"]),
-            DnfGeneration::Dnf4 => self.read([
-                "repoquery",
-                "--installed",
-                "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1",
-            ]),
-        }
+        self.read([
+            "repoquery",
+            "--installed",
+            "--qf",
+            "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1\\n",
+        ])
     }
     pub fn updates_plan(&self) -> CommandPlan {
-        match self.generation {
-            DnfGeneration::Dnf5 => self.read(["list", "--upgrades", "--json"]),
-            DnfGeneration::Dnf4 => self.read([
-                "repoquery",
-                "--upgrades",
-                "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
-            ]),
-        }
+        self.read([
+            "repoquery",
+            "--upgrades",
+            "--qf",
+            "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
+        ])
     }
     pub fn details_plan(&self, p: &PackageId) -> Result<CommandPlan, DnfError> {
         if p.as_str().trim().is_empty() {
             return Err(DnfError::InvalidPackageId);
         }
-        Ok(match self.generation {
-            DnfGeneration::Dnf5 => self.read(["info", p.as_str()]),
-            DnfGeneration::Dnf4 => self.read(["repoquery", "--info", p.as_str()]),
-        })
+        Ok(self.read(["repoquery", "--info", p.as_str()]))
     }
     pub fn system_upgrade_plan(&self) -> CommandPlan {
         self.elevated(["upgrade", "--refresh"])

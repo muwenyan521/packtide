@@ -87,7 +87,7 @@ case "${0##*/}" in
   apt-cache) cat "$CORE_READ_FIXTURES/apt/catalog.deb822" ;;
   apt-get) cat "$CORE_READ_FIXTURES/apt/updates.txt" ;;
   dpkg-query) cat "$CORE_READ_FIXTURES/apt/installed.tsv" ;;
-  dnf5) printf '%s\n' '[{"name":"bash","version":"5.2","arch":"x86_64"}]' ;;
+  dnf5) case "$*" in *--installed*) printf 'bash\t0\t5.2\t1\tx86_64\tfedora\t1\n' ;; *) printf 'bash\t0\t5.2\t1\tx86_64\tfedora\t0\n' ;; esac ;;
   dnf) printf 'bash\t0\t5.2\t1\tx86_64\tfedora\t1\n' ;;
   zypper) cat "$CORE_READ_FIXTURES/zypper/search.xml" ;;
   apk) cat "$CORE_READ_FIXTURES/apk/search.tsv" ;;
@@ -193,16 +193,42 @@ fn expected_read_argv() -> Vec<(&'static str, Vec<&'static str>, usize)> {
             1,
         ),
         ("apt-get", vec!["--just-print", "--simulate", "upgrade"], 1),
-        ("dnf5", vec!["list", "--json"], 2),
-        ("dnf5", vec!["list", "--installed", "--json"], 1),
-        ("dnf5", vec!["info", "bash"], 1),
-        ("dnf5", vec!["list", "--upgrades", "--json"], 1),
+        (
+            "dnf5",
+            vec![
+                "repoquery",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
+            ],
+            2,
+        ),
+        (
+            "dnf5",
+            vec![
+                "repoquery",
+                "--installed",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1\\n",
+            ],
+            1,
+        ),
+        ("dnf5", vec!["repoquery", "--info", "bash"], 1),
+        (
+            "dnf5",
+            vec![
+                "repoquery",
+                "--upgrades",
+                "--qf",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
+            ],
+            1,
+        ),
         (
             "dnf",
             vec![
                 "repoquery",
                 "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
             ],
             2,
         ),
@@ -212,7 +238,7 @@ fn expected_read_argv() -> Vec<(&'static str, Vec<&'static str>, usize)> {
                 "repoquery",
                 "--installed",
                 "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t1\\n",
             ],
             1,
         ),
@@ -222,7 +248,7 @@ fn expected_read_argv() -> Vec<(&'static str, Vec<&'static str>, usize)> {
                 "repoquery",
                 "--upgrades",
                 "--qf",
-                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0",
+                "%{name}\t%{epoch}\t%{version}\t%{release}\t%{arch}\t%{repoid}\t0\\n",
             ],
             1,
         ),
@@ -242,35 +268,31 @@ fn expected_read_argv() -> Vec<(&'static str, Vec<&'static str>, usize)> {
             vec!["--xmlout", "search", "-s", "-i", "-t", "package"],
             1,
         ),
-        ("zypper", vec!["--xmlout", "info", "bash"], 1),
+        ("zypper", vec!["info", "bash"], 1),
         ("zypper", vec!["--xmlout", "list-updates"], 1),
         ("apk", vec!["search", "--no-cache", "*"], 1),
         ("apk", vec!["search", "--no-cache", "bash"], 1),
         ("apk", vec!["info", "--installed"], 1),
         ("apk", vec!["info", "bash"], 1),
-        ("apk", vec!["version", "--available"], 1),
+        ("apk", vec!["list", "--upgradable"], 1),
         ("xbps-query", vec!["-Rs", "."], 1),
         ("xbps-query", vec!["-Rs", "bash"], 1),
         ("xbps-query", vec!["-l"], 1),
         ("xbps-query", vec!["-S", "bash"], 1),
-        ("xbps-query", vec!["-u"], 1),
+        ("xbps-install", vec!["-u", "-n"], 1),
         (
             "flatpak",
             vec![
                 "remote-ls",
                 "--app",
                 "--cached",
-                "--columns=application,origin,name,installation",
+                "--columns=application,origin,name",
             ],
             1,
         ),
         (
             "flatpak",
-            vec![
-                "list",
-                "--app",
-                "--columns=application,origin,name,installation",
-            ],
+            vec!["list", "--app", "--columns=application,origin,name"],
             2,
         ),
         ("flatpak", vec!["info", "org.example.Hello"], 1),
@@ -423,7 +445,7 @@ fn expected_write_args(backend: BackendId, operation: &WriteOperation) -> Vec<&'
             vec!["update"],
         ),
         BackendId::Apk => (vec!["add", "PKG"], vec!["del", "PKG"], vec!["upgrade"]),
-        BackendId::Xbps => (vec!["-y", "PKG"], vec!["-y", "PKG"], vec!["-Su"]),
+        BackendId::Xbps => (vec!["PKG"], vec!["-y", "PKG"], vec!["-Su"]),
         BackendId::Flatpak => (
             vec!["install", "PKG"],
             vec!["uninstall", "PKG"],

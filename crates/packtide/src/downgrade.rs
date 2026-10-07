@@ -70,7 +70,7 @@ pub fn run(query: &[String]) -> Result<()> {
         "--info=inline",
     ]);
     let preview = format!(
-        "bash -c 'exec {} __preview downgrade \"$1\"' packtide-preview \"{{}}\"",
+        "sh -c 'exec {} __preview downgrade \"$1\"' packtide-preview \"{{}}\"",
         crate::ui::preview::shell_quote(current_executable()?.to_string_lossy().as_ref())
     );
     args.extend(["--preview", preview.as_str()]);

@@ -16,7 +16,7 @@ jobs:
       - name: Install build toolchain
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential ca-certificates curl pkg-config python3 tar
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential musl-tools ca-certificates curl pkg-config python3 tar
           fzf_version=0.74.4
           curl --fail --location --silent --show-error \
             "https://github.com/junegunn/fzf/releases/download/v${fzf_version}/fzf-${fzf_version}-linux_amd64.tar.gz" \
@@ -27,6 +27,8 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo build --workspace --release --locked
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --target x86_64-unknown-linux-musl --workspace --release --locked
           python3 packaging/verify-version.py
           bash packaging/check-release-artifacts.sh
       - name: Package release
@@ -37,7 +39,10 @@ jobs:
           dir="shorin-contrib-${version}-x86_64-unknown-linux-gnu"
           mkdir -p "$dir"
           install -m 0755 target/release/packtide target/release/systide "$dir/"
+          ln -s packtide "$dir/ptd"
+          ln -s systide "$dir/suu"
           cp README.md README.zh-CN.md CONTRIBUTING.md CONTRIBUTING.zh-CN.md SECURITY.md SECURITY.zh-CN.md "$dir/"
+          cp install.sh "$dir/"
           mkdir -p "$dir/docs"
           cp docs/package-manager-support.md docs/package-manager-support.zh-CN.md docs/releasing.md docs/releasing.zh-CN.md "$dir/docs/"
           cp man/*.1 "$dir/"
@@ -48,6 +53,20 @@ jobs:
           printf 'version=%s\ncommit=%s\ntarget=x86_64-unknown-linux-gnu\n' "$version" "$GITHUB_SHA" > "$dir/PROVENANCE"
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          musl_dir="shorin-contrib-${version}-x86_64-unknown-linux-musl"
+          mkdir -p "$musl_dir/docs" "$musl_dir/packaging"
+          install -m 0755 target/x86_64-unknown-linux-musl/release/packtide target/x86_64-unknown-linux-musl/release/systide "$musl_dir/"
+          ln -s packtide "$musl_dir/ptd"
+          ln -s systide "$musl_dir/suu"
+          cp README.md README.zh-CN.md CONTRIBUTING.md CONTRIBUTING.zh-CN.md SECURITY.md SECURITY.zh-CN.md "$musl_dir/"
+          cp install.sh "$musl_dir/"
+          cp docs/package-manager-support.md docs/package-manager-support.zh-CN.md docs/releasing.md docs/releasing.zh-CN.md "$musl_dir/docs/"
+          cp man/*.1 completions/* "$musl_dir/"
+          cp packaging/README.md packaging/README.zh-CN.md "$musl_dir/packaging/"
+          for file in LICENSE NOTICE.md; do test ! -e "$file" || cp "$file" "$musl_dir/"; done
+          printf 'version=%s\ncommit=%s\ntarget=x86_64-unknown-linux-musl\n' "$version" "$GITHUB_SHA" > "$musl_dir/PROVENANCE"
+          tar -czf "$musl_dir.tar.gz" "$musl_dir"
+          sha256sum "$musl_dir.tar.gz" > "$musl_dir.tar.gz.sha256"
       - name: Publish GitHub release
         shell: bash
         env:

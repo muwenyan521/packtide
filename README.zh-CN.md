@@ -55,6 +55,21 @@
 
 ## 安装
 
+### 非 Arch 一键安装
+
+安装脚本会自动检测发行版、glibc/musl 运行时、架构、权限工具和安装路径，选择对应的
+GNU 或静态 musl 发布文件，补全 `fzf` 等依赖并把命令目录加入 `PATH`。如果发现旧的
+`pac`、`pacr`、`pacrrr`、`sysup`、`shorin-pac` 或 `shorin-contrib`，会先询问是否备份并替换。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/muwenyan521/packtide/master/install.sh | sh
+```
+
+正式缩写是：`ptd` 对应 `packtide`，`suu` 对应 `systide`。它们在 2026-10-07 通过本机
+命令空间和 crates.io 名称检查，项目自身没有重复注册；完整命令仍然保留。
+
+设置 `PACKTIDE_UI_LANG=zh` 使用中文安装提示，设置 `PACKTIDE_UI_LANG=en` 使用英文提示。
+
 ### 发布归档
 
 下载 [`x86_64-unknown-linux-gnu` 发布归档](https://github.com/muwenyan521/packtide/releases)并验证对应的 SHA-256 文件，然后将两个二进制文件放入 `PATH`。归档还包含 man 页面、Shell 补全、`LICENSE`、`NOTICE.md` 和发布溯源信息。

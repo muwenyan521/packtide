@@ -150,8 +150,12 @@ fn deduplicate_updates(updates: Vec<PackageUpdate>) -> Vec<PackageUpdate> {
     updates
         .into_iter()
         .filter(|item| {
+            let backend = match item.identity.backend {
+                BackendId::Dnf4 | BackendId::Dnf5 => BackendId::Dnf5,
+                backend => backend,
+            };
             seen.insert((
-                item.identity.backend,
+                backend,
                 item.identity.scope,
                 item.identity.native_key.clone(),
             ))
@@ -518,5 +522,25 @@ mod native_update_tests {
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].identity.backend, BackendId::Pacman);
         assert_eq!(updates[1].identity.backend, BackendId::Paru);
+    }
+
+    #[test]
+    fn deduplication_merges_dnf_generations() {
+        let update = |backend| {
+            PackageUpdate::from_identity(
+                PackageSource::Dnf,
+                PackageIdentity::new(
+                    backend,
+                    backend.default_kind(),
+                    PackageScope::System,
+                    NativePackageKey::new("openssl").unwrap(),
+                ),
+                "openssl".to_owned(),
+                Some("3".to_owned()),
+                "openssl 3".to_owned(),
+            )
+        };
+        let updates = deduplicate_updates(vec![update(BackendId::Dnf4), update(BackendId::Dnf5)]);
+        assert_eq!(updates.len(), 1);
     }
 }

@@ -6,6 +6,8 @@ prefix=${PREFIX:-/usr}
 bindir="$root$prefix/bin"
 install -Dm755 target/release/packtide "$bindir/packtide"
 install -Dm755 target/release/systide "$bindir/systide"
+ln -sfn packtide "$bindir/ptd"
+ln -sfn systide "$bindir/suu"
 install -Dm644 man/packtide.1 "$root$prefix/share/man/man1/packtide.1"
 install -Dm644 man/systide.1 "$root$prefix/share/man/man1/systide.1"
 install -Dm644 man/packtide.zh-CN.1 "$root$prefix/share/man/zh_CN/man1/packtide.1"

@@ -116,7 +116,7 @@ fn native_install_catalog_matrix_emits_typed_hidden_rows() {
             "fedora",
             "DNF:dnf",
             "dnf5",
-            "printf '[{\"name\":\"hello\",\"version\":\"1\",\"arch\":\"x86_64\"}]'",
+            "printf 'hello\\t0\\t1\\trel\\tx86_64\\tbase\\t0\\n'",
         ),
         (
             "fedora",
@@ -187,7 +187,7 @@ fn native_install_picker_selects_row_and_runs_transaction_argv() {
             "fedora",
             "dnf5",
             "dnf5",
-            "printf '[{\"name\":\"hello\",\"version\":\"1\",\"arch\":\"x86_64\"}]'",
+            "printf 'hello\\t0\\t1\\trel\\tx86_64\\tbase\\t0\\n'",
             "install hello",
         ),
         (
@@ -216,7 +216,7 @@ fn native_install_picker_selects_row_and_runs_transaction_argv() {
             "xbps-query",
             "xbps-install",
             "printf 'hello-1.0_1\\trepo\\tx86_64\\n'",
-            "-y hello",
+            "hello",
         ),
     ];
     for (id, catalog, transaction, body, expected) in cases {

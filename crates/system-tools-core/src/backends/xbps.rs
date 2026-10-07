@@ -61,9 +61,19 @@ pub fn parse_pkgver(value: &str) -> Result<(String, String, Option<String>), Xbp
     let boundary = base
         .char_indices()
         .filter(|(_, c)| *c == '-')
+        .rev()
         .find(|(i, _)| {
-            base.get(*i + 1..)
-                .is_some_and(|s| s.as_bytes().first().is_some_and(u8::is_ascii_digit))
+            base.get(*i + 1..).is_some_and(|s| {
+                let first = s.chars().next();
+                let has_digit = s.chars().any(|c| c.is_ascii_digit());
+                has_digit
+                    && first.is_some_and(|c| {
+                        c.is_ascii_digit()
+                            || c.is_ascii_uppercase()
+                            || c == 'v'
+                            || c.is_ascii_lowercase()
+                    })
+            })
         })
         .map(|(i, _)| i);
     let Some(i) = boundary else {
@@ -79,24 +89,37 @@ pub fn parse_pkgver(value: &str) -> Result<(String, String, Option<String>), Xbp
 
 fn parse_record(line_no: usize, line: &str, installed: bool) -> Result<XbpsPackage, XbpsError> {
     let fields: Vec<_> = line.split('\t').collect();
-    if fields.len() < 2 {
+    let tabular = fields.len() >= 2;
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let package_token = if tabular {
+        fields.first().copied().unwrap_or_default()
+    } else if tokens.first().is_some_and(|token| token.starts_with('[')) {
+        tokens.get(1).copied().unwrap_or_default()
+    } else {
+        tokens
+            .iter()
+            .find(|token| parse_pkgver(token).is_ok())
+            .copied()
+            .unwrap_or_default()
+    };
+    if package_token.trim().is_empty() {
         return Err(XbpsError::MalformedRecord {
             line: line_no,
-            reason: "expected package version and repository fields",
+            reason: "expected package version",
         });
     }
-    let (name, version, revision) = parse_pkgver(fields[0])?;
+    let (name, version, revision) = parse_pkgver(package_token)?;
     Ok(XbpsPackage {
         name,
         version,
         revision,
         repository: fields
             .get(1)
-            .filter(|v| !v.is_empty())
-            .map(|v| (*v).to_owned()),
+            .filter(|v| !v.is_empty() && tabular)
+            .map(|v| v.trim().to_owned()),
         architecture: fields
             .get(2)
-            .filter(|v| !v.is_empty())
+            .filter(|v| !v.is_empty() && tabular)
             .map(|v| (*v).to_owned()),
         installed,
         held: fields.get(3).is_some_and(|v| *v == "hold"),
@@ -107,7 +130,11 @@ pub fn parse_search(input: &str) -> Result<Vec<XbpsPackage>, XbpsError> {
     input
         .lines()
         .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .filter(|(_, l)| {
+            !l.trim().is_empty()
+                && !l.trim_start().starts_with('#')
+                && !l.trim_start().starts_with("WARNING:")
+        })
         .map(|(i, l)| parse_record(i + 1, l, false))
         .collect()
 }
@@ -123,13 +150,27 @@ pub fn parse_updates(input: &str) -> Result<Vec<XbpsUpdate>, XbpsError> {
     input
         .lines()
         .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty())
+        .filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with("WARNING:"))
         .map(|(i, l)| {
-            let fields: Vec<_> = l.split('\t').collect();
+            let fields: Vec<_> = if l.contains('\t') {
+                l.split('\t').collect()
+            } else {
+                l.split_whitespace().collect()
+            };
             if fields.len() < 3 {
                 return Err(XbpsError::MalformedRecord {
                     line: i + 1,
                     reason: "expected name, current and candidate",
+                });
+            }
+            if matches!(fields[1], "install" | "update") {
+                let (name, candidate, _) = parse_pkgver(fields[0])?;
+                return Ok(XbpsUpdate {
+                    name,
+                    current: None,
+                    candidate,
+                    repository: fields.get(3).map(|v| (*v).to_owned()),
+                    architecture: fields.get(2).map(|v| (*v).to_owned()),
                 });
             }
             let (name, current, _) = parse_pkgver(fields[0])?;
@@ -201,7 +242,12 @@ impl XbpsBackend {
         Ok(self.read(["-S", package.as_str()]))
     }
     pub fn updates_plan(&self) -> CommandPlan {
-        self.read(["-u"])
+        let mut p = CommandPlan::new(self.install.clone())
+            .with_backend(BackendId::Xbps)
+            .with_locale("C")
+            .with_privilege(CommandPrivilege::User);
+        p.args.extend(["-u", "-n"].into_iter().map(OsString::from));
+        p
     }
     pub fn sync_plan(&self) -> CommandPlan {
         let mut p = CommandPlan::new(self.install.clone())
@@ -222,7 +268,7 @@ impl XbpsBackend {
     pub fn transaction(&self, operation: WriteOperation) -> Result<TransactionPlan, XbpsError> {
         let operation_for_plan = operation.clone();
         let (program, verb, packages) = match &operation {
-            WriteOperation::Install { packages } => (self.install.clone(), "-y", packages),
+            WriteOperation::Install { packages } => (self.install.clone(), "", packages),
             WriteOperation::Remove { packages } => (self.remove.clone(), "-y", packages),
             WriteOperation::SystemUpgrade => {
                 return Ok(TransactionPlan {
@@ -247,7 +293,9 @@ impl XbpsBackend {
             .with_backend(BackendId::Xbps)
             .with_locale("C")
             .with_privilege(CommandPrivilege::Elevated);
-        c.args.push(OsString::from(verb));
+        if !verb.is_empty() {
+            c.args.push(OsString::from(verb));
+        }
         c.args.extend(
             packages
                 .iter()
@@ -302,7 +350,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(t.command.program, std::path::Path::new("/xbps-install"));
-        assert_eq!(t.command.args, ["-y", "foo;touch /tmp/x"]);
+        assert_eq!(t.command.args, ["foo;touch /tmp/x"]);
         assert_eq!(t.command.privilege, CommandPrivilege::Elevated);
     }
 
@@ -319,6 +367,11 @@ mod tests {
         assert_eq!(updates[0].name, "lib-foo");
         assert_eq!(updates[0].current.as_deref(), Some("1.2"));
         assert_eq!(updates[0].candidate, "1.3");
+        let install =
+            parse_updates("libicu78-78.3_1 install x86_64 https://repo.example\n").unwrap();
+        assert_eq!(install[0].name, "libicu78");
+        assert_eq!(install[0].current, None);
+        assert_eq!(install[0].candidate, "78.3");
         println!("installed={installed:?} updates={updates:?}");
     }
 }

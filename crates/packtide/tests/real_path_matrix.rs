@@ -55,7 +55,7 @@ fn preview_matrix_resolves_hidden_identity_and_exact_provider_argv() {
         (
             "dnf5",
             "DNF:dnf|b=dnf5|s=system|k=system|n=68656c6c6f",
-            "info hello",
+            "repoquery --info hello",
         ),
         (
             "dnf",
@@ -65,7 +65,7 @@ fn preview_matrix_resolves_hidden_identity_and_exact_provider_argv() {
         (
             "zypper",
             "ZYPPER:zypper|b=zypper|s=system|k=system|n=68656c6c6f",
-            "--xmlout info hello",
+            "info hello",
         ),
         (
             "apk",

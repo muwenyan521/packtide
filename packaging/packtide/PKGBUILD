@@ -1,5 +1,5 @@
 pkgname=packtide
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Package and system maintenance tools'
 arch=('x86_64')
@@ -17,11 +17,10 @@ optdepends=(
   'pacman-contrib: checkupdates command'
   'waybar: update signal refresh'
 )
-# Replace this URL with the maintainer's canonical public source before submission.
-source=()
-sha256sums=()
+source=("git+https://github.com/muwenyan521/packtide.git#tag=v${pkgver}")
+sha256sums=('SKIP')
 
-_srcdir="$startdir/../.."
+_srcdir="$srcdir/packtide"
 
 build() {
   cd "$_srcdir"
