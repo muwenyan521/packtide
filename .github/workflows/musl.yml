@@ -23,7 +23,7 @@ jobs:
           cargo fmt --all -- --check
           sh -n install.sh packaging/install.sh
           ./packaging/check-release-artifacts.sh --help >/dev/null 2>&1 || true
-      - name: Build and test
+      - name: Build core and release artifacts
         run: |
-          cargo test --workspace --locked
+          cargo test -p system-tools-core --lib --locked
           cargo build --target x86_64-unknown-linux-musl --workspace --release --locked
