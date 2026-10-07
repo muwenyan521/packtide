@@ -56,7 +56,9 @@ impl Fixture {
             .arg(self.0.join("cache"))
             .args(["--", env!("CARGO_BIN_EXE_packtide"), "install", "hello"])
             .env("PACKTIDE_INSTALL_LIST_ONLY", "1")
-            .env("PACKTIDE_UI_LANG", "en");
+            .env("PACKTIDE_UI_LANG", "en")
+            .env_remove("PACKTIDE_OS_RELEASE_FILE")
+            .env_remove("PACKTIDE_TEST_ASSUME_ARCH");
         command.output().expect("run install list-only")
     }
 
@@ -92,7 +94,9 @@ impl Fixture {
             .args(["--setenv", "HOME"])
             .arg(&self.0)
             .args(["--", env!("CARGO_BIN_EXE_packtide"), "install", "hello"])
-            .env("PACKTIDE_UI_LANG", "en");
+            .env("PACKTIDE_UI_LANG", "en")
+            .env_remove("PACKTIDE_OS_RELEASE_FILE")
+            .env_remove("PACKTIDE_TEST_ASSUME_ARCH");
         command.output().expect("run install picker")
     }
 }
