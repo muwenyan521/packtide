@@ -131,10 +131,18 @@ systide [--list] [--ui-lang auto|zh|en] [--news-source SOURCE] [--count N]
 
 ## 运行依赖
 
+- 支持的原生发行版：Arch Linux 及 CachyOS/Manjaro 分支、Debian、Ubuntu、Fedora、
+  Rocky Linux、RHEL、openSUSE、SUSE、Alpine Linux 和 Void Linux，架构为 `x86_64`。
+- GNU 发布归档要求 glibc `2.36` 或更高版本。musl 系统或 glibc 较旧时，请使用静态
+  musl 归档。
 - `fzf >= 0.74.0`，用于交互式选择器。
 - 当前发行版的原生软件包管理器命令。
 - 系统作用域事务需要 `sudo`。
 - 只有需要对应结果或更新时才需要安装可选后端命令。
+
+安装脚本会在下载发布归档前检查架构、libc、glibc 版本、发行版、原生包管理器命令、
+`fzf` 版本和权限工具。未知发行版只要存在可识别的包管理器就会继续，并提示它选择的
+包管理器；完全找不到包管理器时才会停止并提示不受支持。
 
 语言会根据 locale 环境自动选择。`packtide` 可通过 `PACKTIDE_UI_LANG=auto|zh|en` 覆盖，
 `systide` 可通过 `--ui-lang auto|zh|en` 覆盖。

@@ -10,7 +10,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    container: debian:bullseye
+    container: debian:bookworm
     steps:
       - uses: actions/checkout@v4
       - name: Install build toolchain

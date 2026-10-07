@@ -138,10 +138,20 @@ systide [--list] [--ui-lang auto|zh|en] [--news-source SOURCE] [--count N]
 
 ## Runtime requirements
 
+- Supported native distributions: Arch Linux and its CachyOS/Manjaro derivatives, Debian,
+  Ubuntu, Fedora, Rocky Linux, RHEL, openSUSE, SUSE, Alpine Linux, and Void Linux on `x86_64`.
+- GNU release archives require glibc `2.36` or newer. Use the static musl archive on a
+  musl system or when the installed glibc is older.
 - `fzf >= 0.74.0` for the interactive picker.
 - The native package-manager commands for the detected distribution.
 - `sudo` for system-scope transactions.
 - Optional provider commands only when their rows or updates are wanted.
+
+The installer checks the architecture, libc, glibc version, distribution, native
+package-manager command, `fzf` version, and privilege helper before downloading a release
+archive. An unknown distribution can continue when one of the supported package managers
+is present; the installer says which manager it selected. It stops when no manager can be
+detected.
 
 The locale environment selects the language. Override it with
 `PACKTIDE_UI_LANG=auto|zh|en` for `packtide` or `--ui-lang auto|zh|en` for `systide`.

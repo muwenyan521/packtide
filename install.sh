@@ -11,6 +11,10 @@ msg() {
     if [ "$lang" = zh ]; then
         case "$1" in
             detect) say "检测到发行版：$2（$3 架构，$4 运行时）" ;;
+            detected_manager) say "当前发行版未原生支持，将使用检测到的包管理器：$2" ;;
+            unsupported_distro) say "暂不支持自动安装到此发行版：$2。请查看 README 中的支持列表。" ;;
+            glibc_too_old) say "当前 glibc 为 $2；GNU 发布包要求 glibc 2.36 或更高版本。" ;;
+            fzf_too_old) say "fzf 版本过旧：需要 0.74.0 或更高版本。" ;;
             deps) say "正在补全运行依赖：$*" ;;
             replace) say "检测到已有命令：$2。是否备份并替换？[y/N]" ;;
             install_done) say "安装完成：$2" ;;
@@ -21,6 +25,10 @@ msg() {
     else
         case "$1" in
             detect) say "Detected: $2 ($3, $4 runtime)" ;;
+            detected_manager) say "This distribution is not natively supported; using detected package manager: $2" ;;
+            unsupported_distro) say "Automatic installation is not supported on $2. See the supported distributions in README." ;;
+            glibc_too_old) say "glibc $2 detected; the GNU release requires glibc 2.36 or newer." ;;
+            fzf_too_old) say "fzf is too old; version 0.74.0 or newer is required." ;;
             deps) say "Installing runtime dependencies: $*" ;;
             replace) say "Existing command found: $2. Back up and replace it? [y/N]" ;;
             install_done) say "Installed: $2" ;;
@@ -32,6 +40,17 @@ msg() {
 }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
+version_at_least() {
+    awk -v actual="$1" -v required="$2" 'BEGIN {
+        split(actual, a, "."); split(required, r, ".");
+        for (i = 1; i <= 3; i++) {
+            av = a[i] + 0; rv = r[i] + 0;
+            if (av > rv) exit 0;
+            if (av < rv) exit 1;
+        }
+        exit 0;
+    }'
+}
 run_privileged() {
     if [ -n "$as_root" ]; then
         "$as_root" "$@"
@@ -48,16 +67,72 @@ arch=$(uname -m)
 case "$arch" in x86_64|amd64) artifact_arch=x86_64 ;; *) say "Unsupported architecture: $arch" >&2; exit 1 ;; esac
 if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
     libc=musl
-else
+elif command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi 'GNU libc'; then
     libc=gnu
+else
+    say "Cannot identify the system C library (glibc or musl)." >&2
+    exit 1
 fi
 
 distro=unknown
-if [ -r /etc/os-release ]; then
-    . /etc/os-release
+os_release_file=${PACKTIDE_OS_RELEASE_FILE:-/etc/os-release}
+if [ -r "$os_release_file" ]; then
+    . "$os_release_file"
     distro=${ID:-unknown}
 fi
 msg detect "$distro" "$artifact_arch" "$libc"
+
+native_command=
+native_family=
+native_supported=1
+case "$distro" in
+    arch|cachyos|manjaro) native_command=pacman; native_family=arch ;;
+    debian|ubuntu) native_command=apt-get; native_family=apt ;;
+    fedora|rocky|rhel) native_family=dnf ;;
+    opensuse*|suse*) native_command=zypper; native_family=zypper ;;
+    alpine) native_command=apk; native_family=apk ;;
+    void) native_command=xbps-install; native_family=xbps ;;
+    *) native_supported=0 ;;
+esac
+
+if [ "$native_supported" -eq 1 ] && [ "$native_family" = dnf ]; then
+    if need_cmd dnf5; then native_command=dnf5; else native_command=dnf; fi
+fi
+
+if [ "$native_supported" -eq 0 ]; then
+    for candidate in pacman apt-get dnf5 dnf zypper apk xbps-install; do
+        if need_cmd "$candidate"; then
+            native_command=$candidate
+            case "$candidate" in
+                pacman) native_family=arch ;;
+                apt-get) native_family=apt ;;
+                dnf5|dnf) native_family=dnf ;;
+                zypper) native_family=zypper ;;
+                apk) native_family=apk ;;
+                xbps-install) native_family=xbps ;;
+            esac
+            break
+        fi
+    done
+    if [ -z "$native_command" ]; then
+        msg unsupported_distro "$distro" >&2
+        exit 1
+    fi
+    msg detected_manager "$native_command"
+fi
+
+if [ "$libc" = gnu ]; then
+    glibc_version=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+    if [ -z "$glibc_version" ] || ! version_at_least "$glibc_version" 2.36; then
+        msg glibc_too_old "${glibc_version:-unknown}" >&2
+        exit 1
+    fi
+fi
+
+if ! need_cmd "$native_command"; then
+    say "Required native package manager not found: $native_command" >&2
+    exit 1
+fi
 
 as_root=""
 if [ "$(id -u)" -eq 0 ]; then
@@ -70,26 +145,43 @@ else
     bindir=${XDG_BIN_HOME:-$HOME/.local/bin}
 fi
 
-if ! need_cmd fzf || { [ "$(id -u)" -eq 0 ] && ! need_cmd sudo && ! need_cmd doas; }; then
+fzf_ok=0
+if need_cmd fzf; then
+    fzf_version=$(fzf --version 2>/dev/null | awk 'NR == 1 { print $1 }')
+    if version_at_least "$fzf_version" 0.74.0; then fzf_ok=1; fi
+fi
+if [ "$fzf_ok" -ne 1 ]; then
+    if need_cmd fzf; then msg fzf_too_old; fi
+fi
+
+if [ "$fzf_ok" -ne 1 ] || { [ "$(id -u)" -eq 0 ] && ! need_cmd sudo && ! need_cmd doas; }; then
     if [ "$(id -u)" -ne 0 ] && ! need_cmd fzf && [ -z "$as_root" ]; then
         msg unsupported
         exit 1
     fi
-    if [ "$distro" = arch ]; then
+    if [ "$native_family" = arch ]; then
         msg deps pacman fzf sudo; run_privileged pacman -Sy --needed --noconfirm fzf sudo
-    elif [ "$distro" = debian ] || [ "$distro" = ubuntu ]; then
+    elif [ "$native_family" = apt ]; then
         msg deps apt-get fzf sudo; run_privileged apt-get update; run_privileged apt-get install -y fzf sudo
-    elif [ "$distro" = fedora ] || [ "$distro" = rocky ] || [ "$distro" = rhel ]; then
-        msg deps dnf fzf sudo; run_privileged dnf install -y fzf sudo
-    elif case "$distro" in opensuse*|suse*) true ;; *) false ;; esac; then
+    elif [ "$native_family" = dnf ]; then
+        msg deps "$native_command" fzf sudo; run_privileged "$native_command" install -y fzf sudo
+    elif [ "$native_family" = zypper ]; then
         msg deps zypper fzf sudo; run_privileged zypper --non-interactive install fzf sudo
-    elif [ "$distro" = alpine ]; then
+    elif [ "$native_family" = apk ]; then
         msg deps apk fzf doas; run_privileged apk add fzf doas
-    elif [ "$distro" = void ]; then
+    elif [ "$native_family" = xbps ]; then
         msg deps xbps-install fzf sudo; run_privileged xbps-install -Sy fzf sudo
-    else
-        msg unsupported
     fi
+fi
+
+if ! need_cmd fzf; then
+    say "fzf installation did not provide a usable command." >&2
+    exit 1
+fi
+fzf_version=$(fzf --version 2>/dev/null | awk 'NR == 1 { print $1 }')
+if ! version_at_least "$fzf_version" 0.74.0; then
+    msg fzf_too_old >&2
+    exit 1
 fi
 
 archive="packtide-${version}-${artifact_arch}-unknown-linux-${libc}.tar.gz"
