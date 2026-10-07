@@ -39,15 +39,33 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
 }
 
 pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
-    #[cfg(debug_assertions)]
-    if env::var_os("PACKTIDE_TEST_ASSUME_ARCH").is_some() {
-        return Ok(BackendId::Pacman);
-    }
     let os_release_path = env::var_os("PACKTIDE_OS_RELEASE_FILE")
         .unwrap_or_else(|| std::ffi::OsString::from("/etc/os-release"));
-    let os_release = fs::read_to_string(&os_release_path).map_err(|error| {
-        anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
-    })?;
+    let os_release = match fs::read_to_string(&os_release_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            #[cfg(debug_assertions)]
+            if env::var_os("PACKTIDE_TEST_ASSUME_ARCH").is_some()
+                && os_release_path != std::path::Path::new("/etc/os-release")
+            {
+                fs::read_to_string("/etc/os-release").map_err(|fallback| {
+                    anyhow::anyhow!(
+                        "cannot detect native package backend for {capability}: {error}; "
+                            .to_owned()
+                            + &format!("fixture fallback failed: {fallback}")
+                    )
+                })?
+            } else {
+                return Err(anyhow::anyhow!(
+                    "cannot detect native package backend for {capability}: {error}"
+                ));
+            }
+            #[cfg(not(debug_assertions))]
+            return Err(anyhow::anyhow!(
+                "cannot detect native package backend for {capability}: {error}"
+            ));
+        }
+    };
     let native = backend_from_os_release(&os_release).map_err(|error| {
         anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
     })?;
