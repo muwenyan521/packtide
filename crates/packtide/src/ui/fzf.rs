@@ -479,7 +479,7 @@ mod tests {
         assert!(bind.contains("sleep 0.3"));
         assert!(bind.contains("s/^[[:space:]]*//"));
         assert!(bind.contains("s/[[:space:]]*$//"));
-        assert!(bind.contains("${#q}\" -ge 2"));
+        assert!(bind.contains("q_length="));
         assert!(bind.contains("PACKTIDE_INSTALL_LIST_ONLY=1"));
         assert!(bind.contains("PACKTIDE_QUERY_STATE"));
         assert!(bind.contains("kill -TERM -- \"-$$\""));

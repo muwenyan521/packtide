@@ -27,7 +27,8 @@ refresh=$2
 output=$(mktemp "${TMPDIR:-/tmp}/packtide-query.XXXXXX")
 set -- install
 if [ "$refresh" = refresh ]; then set -- "$@" --refresh; fi
-if [ "${#q}" -ge 2 ]; then set -- "$@" "$q"; fi
+q_length=$(printf '%s' "$q" | awk '{ print length($0) }')
+if [ "$q_length" -ge 2 ]; then set -- "$@" "$q"; fi
 env PACKTIDE_INSTALL_LIST_ONLY=1 "$0" "$@" >"$output" &
 child=$!
 while kill -0 "$child" 2>/dev/null; do
