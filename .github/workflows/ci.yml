@@ -21,6 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Select Arch fixture for fake-command integration tests
         run: |
           printf 'ID=arch\nNAME="Arch Linux"\n' > "$RUNNER_TEMP/packtide-os-release"
