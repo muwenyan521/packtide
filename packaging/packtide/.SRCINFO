@@ -1,0 +1,24 @@
+pkgbase = packtide
+	pkgdesc = Package and system maintenance tools
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/muwenyan521/packtide
+	arch = x86_64
+	license = MPL-2.0
+	makedepends = cargo
+	makedepends = git
+	depends = fzf>=0.74.0
+	depends = pacman
+	depends = sudo
+	optdepends = paru: AUR package helper
+	optdepends = yay: alternative AUR package helper
+	optdepends = flatpak: Flatpak package operations
+	optdepends = reflector: mirror-update command
+	optdepends = quicksave: Btrfs snapshot support
+	optdepends = grub: GRUB configuration refresh
+	optdepends = pacman-contrib: checkupdates command
+	optdepends = waybar: update signal refresh
+	source = git+https://github.com/muwenyan521/packtide.git#tag=v0.1.1
+	sha256sums = SKIP
+
+pkgname = packtide
