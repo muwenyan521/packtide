@@ -11,12 +11,12 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
-    container: alpine:3.22
+    container: rust:1.88-alpine
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: |
-          apk add --no-cache bash build-base cargo rust rustfmt musl-dev openssl-dev pkgconf fzf python3
+          apk add --no-cache bash build-base rustfmt musl-dev openssl-dev pkgconf fzf python3
       - name: Check formatting and shell entry points
         run: |
           cargo fmt --all -- --check
