@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: |
-          apk add --no-cache bash build-base cargo rust rustfmt clippy musl-dev openssl-dev pkgconf fzf python3
+          apk add --no-cache bash build-base cargo rust rustfmt musl-dev openssl-dev pkgconf fzf python3
       - name: Check formatting and shell entry points
         run: |
           cargo fmt --all -- --check
