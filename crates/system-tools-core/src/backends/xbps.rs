@@ -374,4 +374,15 @@ mod tests {
         assert_eq!(install[0].candidate, "78.3");
         println!("installed={installed:?} updates={updates:?}");
     }
+
+    #[test]
+    fn search_ignores_provider_warnings_before_records() {
+        let packages = parse_search(
+            "WARNING: tzdata-2025a_1: invalid provides: py3:tzdata-2025a\n[-] tzdata-2026e_1 Time zone data\n",
+        )
+        .expect("parse search output with an XBPS warning");
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "tzdata");
+        assert_eq!(packages[0].version, "2026e");
+    }
 }

@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          dir="shorin-contrib-${version}-x86_64-unknown-linux-gnu"
+          dir="packtide-${version}-x86_64-unknown-linux-gnu"
           mkdir -p "$dir"
           install -m 0755 target/release/packtide target/release/systide "$dir/"
           ln -s packtide "$dir/ptd"
@@ -53,7 +53,7 @@ jobs:
           printf 'version=%s\ncommit=%s\ntarget=x86_64-unknown-linux-gnu\n' "$version" "$GITHUB_SHA" > "$dir/PROVENANCE"
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
-          musl_dir="shorin-contrib-${version}-x86_64-unknown-linux-musl"
+          musl_dir="packtide-${version}-x86_64-unknown-linux-musl"
           mkdir -p "$musl_dir/docs" "$musl_dir/packaging"
           install -m 0755 target/x86_64-unknown-linux-musl/release/packtide target/x86_64-unknown-linux-musl/release/systide "$musl_dir/"
           ln -s packtide "$musl_dir/ptd"
@@ -82,7 +82,7 @@ jobs:
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases" \
             -d "$(python3 -c 'import json,os; print(json.dumps({"tag_name":os.environ["GITHUB_REF_NAME"],"generate_release_notes":True}))')")
           upload_url=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{",1)[0])' <<<"$response")
-          for asset in shorin-contrib-*.tar.gz shorin-contrib-*.sha256; do
+          for asset in packtide-*.tar.gz packtide-*.sha256; do
             curl --fail-with-body -sS -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H 'Accept: application/vnd.github+json' \

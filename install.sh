@@ -92,7 +92,7 @@ if ! need_cmd fzf || { [ "$(id -u)" -eq 0 ] && ! need_cmd sudo && ! need_cmd doa
     fi
 fi
 
-archive="shorin-contrib-${version}-${artifact_arch}-unknown-linux-${libc}.tar.gz"
+archive="packtide-${version}-${artifact_arch}-unknown-linux-${libc}.tar.gz"
 base=${PACKTIDE_BASE_URL:-"https://github.com/${repo}/releases/download/v${version}"}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -104,7 +104,7 @@ mkdir -p "$prefix" "$bindir"
 install -m 0755 "$payload/packtide" "$prefix/packtide"
 install -m 0755 "$payload/systide" "$prefix/systide"
 
-for command in pac pacr pacrrr sysup shorin-pac shorin-contrib; do
+for command in pac pacr pacrrr sysup; do
     if path=$(command -v "$command" 2>/dev/null); then
         msg replace "$command"
         if [ "$lang" = zh ]; then read -r answer || answer=; else read -r answer || answer=; fi

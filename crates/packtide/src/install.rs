@@ -80,8 +80,8 @@ pub(crate) fn run(query: &[String], refresh: bool) -> Result<()> {
 fn run_pacman(query: &[String], refresh: bool, started_at: SystemTime) -> Result<()> {
     let pacman = crate::app::require_command_for(
         "pacman",
-        "capability.catalog",
-        "the package catalog lookup",
+        "capability.install",
+        "capability.install",
         false,
     )?;
     let helper = crate::app::package_helper_for("package installation")?;

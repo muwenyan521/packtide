@@ -59,7 +59,7 @@
 
 由于 AUR 暂停新用户注册，Arch 用户暂时也使用此脚本。安装脚本会自动检测发行版、glibc/musl 运行时、架构、权限工具和安装路径，选择对应的
 GNU 或静态 musl 发布文件，补全 `fzf` 等依赖并把命令目录加入 `PATH`。如果发现旧的
-`pac`、`pacr`、`pacrrr`、`sysup`、`shorin-pac` 或 `shorin-contrib`，会先询问是否备份并替换。
+`pac`、`pacr`、`pacrrr` 或 `sysup`，会先询问是否备份并替换。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/muwenyan521/packtide/master/install.sh | sh
