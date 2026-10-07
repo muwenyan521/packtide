@@ -115,7 +115,8 @@ pub(crate) fn preview_command(args: &[String]) -> Result<()> {
     if metadata.trim().is_empty() {
         println!("{}", crate::locale::text(lang, "preview.empty", &[]));
     } else {
-        print!("{}", colorize_metadata(metadata, display_package, lang));
+        let metadata = sanitize_metadata(metadata, backend_id);
+        print!("{}", colorize_metadata(&metadata, display_package, lang));
     }
     if let Some(error) = failure {
         println!(
@@ -245,6 +246,20 @@ fn colorize_metadata(output: &str, package: &str, lang: crate::locale::Lang) -> 
     rendered
 }
 
+fn sanitize_metadata(output: &str, backend: BackendId) -> String {
+    if backend != BackendId::Zypper {
+        return output.to_owned();
+    }
+    let lines = output.lines().collect::<Vec<_>>();
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("Information for package"))
+    else {
+        return output.to_owned();
+    };
+    lines[start..].join("\n")
+}
+
 fn normalize_provider_header(line: &str, package: &str) -> String {
     let lower = line.to_ascii_lowercase();
     for field in ["description:", "webpage:", "installed size:"] {
@@ -314,7 +329,9 @@ pub(crate) fn shell_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{colorize_metadata, detail_identity_key, preview_header, preview_version};
+    use super::{
+        colorize_metadata, detail_identity_key, preview_header, preview_version, sanitize_metadata,
+    };
     use system_tools_core::BackendId;
     use unicode_width::UnicodeWidthStr;
 
@@ -394,6 +411,15 @@ mod tests {
     fn preview_version_ignores_shell_quotes_ansi_and_install_badge() {
         let row = "'\x1b[34mcore            \x1b[0m\tbash                               \t\x1b[2m5.3-1\x1b[0m                \x1b[32m✔ [Installed]\x1b[0m'";
         assert_eq!(preview_version(row), "5.3-1");
+    }
+
+    #[test]
+    fn zypper_preview_drops_repository_preamble() {
+        let raw = "Loading repository data...\nWarning: stale metadata\nReading installed packages...\n\nInformation for package bash:\n----------------------------\nName : bash\n";
+        assert_eq!(
+            sanitize_metadata(raw, BackendId::Zypper),
+            "Information for package bash:\n----------------------------\nName : bash"
+        );
     }
 
     #[test]
