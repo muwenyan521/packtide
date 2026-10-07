@@ -39,7 +39,9 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
 }
 
 pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
-    let os_release = fs::read_to_string("/etc/os-release").map_err(|error| {
+    let os_release_path = env::var_os("PACKTIDE_OS_RELEASE_FILE")
+        .unwrap_or_else(|| std::ffi::OsString::from("/etc/os-release"));
+    let os_release = fs::read_to_string(&os_release_path).map_err(|error| {
         anyhow::anyhow!("cannot detect native package backend for {capability}: {error}")
     })?;
     let native = backend_from_os_release(&os_release).map_err(|error| {

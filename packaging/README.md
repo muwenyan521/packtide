@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 The release contains `packtide` and `systide`. Supported installation paths:
 
-The non-Arch bootstrap path is the repository-root `install.sh`; it selects the GNU or musl
+Until AUR registration reopens, the bootstrap path for every distribution is the repository-root `install.sh`; it selects the GNU or musl
 archive, installs missing `fzf`/privilege dependencies where supported, and asks before
 replacing older `pac`/`sysup`-style commands. It also installs the short aliases `ptd` and `suu`.
 

@@ -2,7 +2,7 @@ English | [简体中文](releasing.zh-CN.md)
 
 # Release checklist
 
-The first public release target is `0.1.1`. A local build is not a release, a reproducible-build claim, or proof that every distro path works.
+The current public release target is `0.1.2`. A local build is not a release, a reproducible-build claim, or proof that every distro path works.
 
 1. Pick the source commit. Review the diff and [source notices](../NOTICE.md); keep the workspace version, tag, package recipe, and artifact names in sync.
 2. Run the checks in [CONTRIBUTING.md](../CONTRIBUTING.md). Exercise CLI help, TUI preview/cancel, man pages, completions, and runtime dependencies.

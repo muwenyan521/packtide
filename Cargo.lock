@@ -251,7 +251,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "package-manager-matrix"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "libc",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "packtide"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "system-tools-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "quick-xml",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "systide"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",

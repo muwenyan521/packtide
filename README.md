@@ -58,9 +58,9 @@ the machine. It prints each step and keeps provider errors in the output.
 
 ## Install
 
-### Non-Arch one-command install
+### One-command install
 
-The installer detects the distribution, glibc/musl runtime, architecture, privilege helper,
+Until AUR registration reopens, use this installer on Arch as well as other distributions. It detects the distribution, glibc/musl runtime, architecture, privilege helper,
 and install prefix. It installs the GNU or static musl release, adds the selected bin directory
 to `PATH`, and asks before replacing commands from older package-manager helpers.
 

@@ -2,7 +2,7 @@
 set -eu
 
 repo=${PACKTIDE_REPOSITORY:-muwenyan521/packtide}
-version=${PACKTIDE_VERSION:-0.1.1}
+version=${PACKTIDE_VERSION:-0.1.2}
 lang=${PACKTIDE_UI_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}
 case "$lang" in zh*|ZH*) lang=zh ;; *) lang=en ;; esac
 
@@ -76,7 +76,7 @@ if ! need_cmd fzf || { [ "$(id -u)" -eq 0 ] && ! need_cmd sudo && ! need_cmd doa
         exit 1
     fi
     if [ "$distro" = arch ]; then
-        msg unsupported
+        msg deps pacman fzf sudo; run_privileged pacman -Sy --needed --noconfirm fzf sudo
     elif [ "$distro" = debian ] || [ "$distro" = ubuntu ]; then
         msg deps apt-get fzf sudo; run_privileged apt-get update; run_privileged apt-get install -y fzf sudo
     elif [ "$distro" = fedora ] || [ "$distro" = rocky ] || [ "$distro" = rhel ]; then

@@ -17,6 +17,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Select Arch fixture for fake-command integration tests
+        run: |
+          printf 'ID=arch\nNAME="Arch Linux"\n' > "$RUNNER_TEMP/packtide-os-release"
+          echo "PACKTIDE_OS_RELEASE_FILE=$RUNNER_TEMP/packtide-os-release" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace -- --test-threads=1

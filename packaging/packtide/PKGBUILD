@@ -1,5 +1,5 @@
 pkgname=packtide
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='Package and system maintenance tools'
 arch=('x86_64')
