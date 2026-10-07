@@ -21,6 +21,7 @@ jobs:
         run: |
           printf 'ID=arch\nNAME="Arch Linux"\n' > "$RUNNER_TEMP/packtide-os-release"
           echo "PACKTIDE_OS_RELEASE_FILE=$RUNNER_TEMP/packtide-os-release" >> "$GITHUB_ENV"
+          echo "PACKTIDE_TEST_ASSUME_ARCH=1" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/fake-arch-bin"
           printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fake-arch-bin/pacman"
           chmod 0755 "$RUNNER_TEMP/fake-arch-bin/pacman"

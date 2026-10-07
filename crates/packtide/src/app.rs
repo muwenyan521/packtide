@@ -39,6 +39,13 @@ pub(crate) fn package_helper_for(capability: &str) -> Result<&'static str> {
 }
 
 pub(crate) fn native_backend(capability: &str) -> Result<BackendId> {
+    #[cfg(debug_assertions)]
+    if env::var_os("PACKTIDE_TEST_ASSUME_ARCH").is_some() {
+        let resolver = ExecutableResolver::from_path(env::var_os("PATH").as_deref());
+        if resolver.resolve(OsStr::new("pacman")).is_some() {
+            return Ok(BackendId::Pacman);
+        }
+    }
     let os_release_path = env::var_os("PACKTIDE_OS_RELEASE_FILE")
         .unwrap_or_else(|| std::ffi::OsString::from("/etc/os-release"));
     let os_release = fs::read_to_string(&os_release_path).map_err(|error| {
