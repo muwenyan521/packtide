@@ -29,8 +29,10 @@ jobs:
           echo "PACKTIDE_OS_RELEASE_FILE=$RUNNER_TEMP/packtide-os-release" >> "$GITHUB_ENV"
           echo "PACKTIDE_TEST_ASSUME_ARCH=1" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/fake-arch-bin"
-          printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fake-arch-bin/pacman"
-          chmod 0755 "$RUNNER_TEMP/fake-arch-bin/pacman"
+          for command in pacman paru yay flatpak apt-get; do
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fake-arch-bin/$command"
+            chmod 0755 "$RUNNER_TEMP/fake-arch-bin/$command"
+          done
           echo "$RUNNER_TEMP/fake-arch-bin" >> "$GITHUB_PATH"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
