@@ -25,5 +25,5 @@ jobs:
           ./packaging/check-release-artifacts.sh --help >/dev/null 2>&1 || true
       - name: Build core and release artifacts
         run: |
-          cargo test -p system-tools-core --lib --locked
+          cargo test -p system-tools-core --lib backends:: --locked
           cargo build --target x86_64-unknown-linux-musl --workspace --release --locked
