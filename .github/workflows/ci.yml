@@ -33,6 +33,8 @@ jobs:
             printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fake-arch-bin/$command"
             chmod 0755 "$RUNNER_TEMP/fake-arch-bin/$command"
           done
+          printf '#!/bin/sh\nexit 127\n' > "$RUNNER_TEMP/fake-arch-bin/apt-get"
+          chmod 0755 "$RUNNER_TEMP/fake-arch-bin/apt-get"
           echo "$RUNNER_TEMP/fake-arch-bin" >> "$GITHUB_PATH"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
